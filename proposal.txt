@@ -1,0 +1,10 @@
+Search
+- tracks
+- artists
+- albums
+- playlists
+
+Track
+- album
+- artist
+- 

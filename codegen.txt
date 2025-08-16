@@ -1,0 +1,1 @@
+npx kysely-codegen --dialect=postgres --out-file=src/types/db.ts

@@ -1,0 +1,35 @@
+{
+  "name": "spotify-tracks-fetcher",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/MEtooHARD/Spotify-Tracks-Fetcher#readme",
+  "bugs": {
+    "url": "https://github.com/MEtooHARD/Spotify-Tracks-Fetcher/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MEtooHARD/Spotify-Tracks-Fetcher.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "tsc && node ./dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@types/node": "^24.2.1",
+    "@types/spotify-api": "^0.0.25",
+    "chalk": "^5.5.0",
+    "kysely": "^0.28.5",
+    "pg": "^8.16.3",
+    "spotify-web-api-node": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5",
+    "@types/spotify-web-api-node": "^5.0.11",
+    "kysely-codegen": "^0.18.5",
+    "ts-node": "^10.9.2"
+  }
+}
