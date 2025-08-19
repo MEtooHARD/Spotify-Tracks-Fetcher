@@ -133,36 +133,23 @@ export interface Album {
 
 export interface SimplifiedAlbum extends Omit<Album, 'tracks' | 'copyrights' | 'external_ids' | 'label' | 'popularity'> { }
 
-export interface SimplifiedArtist {
+export interface Artist {
     external_urls: ExternalUrls;
+    followers: {
+        href: string;
+        total: number;
+    };
+    genres: Array<string>;
     href: string;
     id: string;
+    images: Array<Image>;
     name: string;
-    type: 'artist';
+    popularity: number;
+    type: string;
     uri: string;
 }
 
-export interface Artist {
-    external_urls: {
-        spotify: string;
-    },
-    followers: {
-        href: string,
-        total: number
-    },
-    genres: Array<string>,
-    href: string,
-    id: string,
-    images: Array<{
-        height: number,
-        url: string,
-        width: number
-    }>,
-    name: string,
-    popularity: number,
-    type: string,
-    uri: string
-}
+export interface SimplifiedArtist extends Omit<Artist, 'followers' | 'images' | 'popularity' | 'genres'> { }
 
 export interface Category {
     href: string;
@@ -171,13 +158,7 @@ export interface Category {
     name: string;
 }
 
-export interface Genres {
-    genres: Array<string>;
-}
-
-export interface Markets {
-    markets: Array<ISO3166_1_Alpha_2>;
-}
+export interface Markets { markets: Array<ISO3166_1_Alpha_2>; }
 
 export interface Playlist {
     collaborative: boolean;
@@ -202,8 +183,6 @@ export interface Playlist {
     uri: string;
 }
 
-// export interface SimplifiedPlaylist extends Omit<Playlist, ''> {}
-
 export interface PlaylistTrack {
     added_at?: string;
     added_by?: {
@@ -216,33 +195,6 @@ export interface PlaylistTrack {
     is_local: boolean;
     track: Track;
 }
-
-export interface SimplifiedTrack {
-    artists: Array<SimplifiedArtist>;
-    available_markets: Array<ISO3166_1_Alpha_2>;
-    disc_number: number;
-    duration_ms: number;
-    explicit: boolean;
-    external_urls: ExternalUrls;
-    href: string;
-    id: string;
-    is_playable: boolean;
-    linked_from: {
-        external_urls: ExternalUrls;
-        href: string;
-        id: string;
-        type: 'track';
-        uri: string;
-    };
-    restrictions: Restrictions;
-    name: string;
-    track_number: number;
-    type: 'track';
-    uri: string;
-    is_local: boolean;
-}
-
-export interface SimplifiedTrack extends Omit<Track, 'album' | 'external_ids'> { }
 
 export interface Track {
     album: SimplifiedAlbum;
@@ -266,6 +218,8 @@ export interface Track {
     is_local: boolean;
 }
 
+export interface SimplifiedTrack extends Omit<Track, 'album' | 'external_ids' | 'popularity'> { }
+
 export interface SearchResult {
     tracks?: Paged<Track>;
     artists?: Paged<Artist>;
@@ -275,3 +229,6 @@ export interface SearchResult {
     episodes: null;
     audiobooks: null;
 }
+
+export type SpotifyResource = Artist | Album | Playlist | Track;
+export type SpotifySimplified = SimplifiedAlbum | SimplifiedArtist | SimplifiedTrack;

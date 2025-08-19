@@ -3,35 +3,49 @@
  * Please do not edit it manually.
  */
 
-export type Json = JsonValue;
+export type AlbumType = "album" | "compilation" | "single";
 
-export type JsonArray = JsonValue[];
+export interface Albums {
+  artists: string[] | null;
+  href: string | null;
+  id: string;
+  name: string;
+  total_tracks: number | null;
+  type: AlbumType;
+  uri: string | null;
+}
 
-export type JsonObject = {
-  [x: string]: JsonValue | undefined;
-};
+export interface Artists {
+  genres: string[] | null;
+  href: string | null;
+  id: string;
+  name: string;
+  uri: string | null;
+}
 
-export type JsonPrimitive = boolean | number | string | null;
-
-export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
+export interface Playlists {
+  id: string;
+  name: string;
+  tracks: string[] | null;
+}
 
 export interface Tracks {
   album: string | null;
-  artists: Json | null;
+  artists: string[] | null;
   disc_number: number | null;
   duration_ms: number | null;
-  ean: string | null;
   explicit: boolean | null;
   href: string | null;
   id: string;
-  isrc: string | null;
   name: string;
   popularity: number | null;
   track_number: number | null;
-  upc: string | null;
   uri: string | null;
 }
 
 export interface DB {
+  albums: Albums;
+  artists: Artists;
+  playlists: Playlists;
   tracks: Tracks;
 }

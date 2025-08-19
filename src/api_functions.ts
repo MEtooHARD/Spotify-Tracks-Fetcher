@@ -6,18 +6,16 @@ import { extractResponse, tryCatch } from "./wrappers";
 export const BearerToken = () => 'Bearer ' + getToken();
 
 export async function defaultFetch<T>(url: string): Promise<T> {
-    let response: T | undefined;
     try {
-        response = await extractResponse<T>(
+        return await extractResponse<T>(
             fetch(url, {
                 method: 'GET',
                 headers: { Authorization: BearerToken() }
             })
         );
-    } catch {
-        console.log('Error occurred on:', url);
-    } finally {
-        return response!;
+    } catch (e) {
+        // console.log('Error occurred on:', url);
+        throw e;
     }
 }
 
@@ -41,22 +39,21 @@ export async function GetToken(
 
 export async function GetAlbums(
     ids: Array<string>,
-    market: ISO3166_1_Alpha_2
-): Promise<Result<{ albums: Array<Album> }>> {
+    market?: ISO3166_1_Alpha_2
+): Promise<{ albums: Array<Album> }> {
     const url = 'https://api.spotify.com/v1/albums?'
         .concat(`ids=${ids.join(',')}`)
-        .concat(`&market=${market}`);
-
-    return await tryCatch(defaultFetch<{ albums: Array<Album> }>(url));
+        .concat(market ? `&market=${market}` : '');
+    return await defaultFetch<{ albums: Array<Album> }>(url);
 }
 
 export async function GetArtists(
     ids: Array<string>,
-): Promise<Result<{ artists: Array<Artist> }>> {
+): Promise<{ artists: Array<Artist> }> {
     const url = 'https://api.spotify.com/v1/artists?'
         .concat(`ids=${ids.join(',')}`);
 
-    return await tryCatch(defaultFetch<{ artists: Array<Artist> }>(url));
+    return await defaultFetch<{ artists: Array<Artist> }>(url);
 }
 
 export async function Search(
@@ -66,7 +63,7 @@ export async function Search(
     limit?: number,
     offset?: number,
     include_external?: 'audio'
-): Promise<Result<SearchResult>> {
+): Promise<SearchResult> {
     const url = 'https://api.spotify.com/v1/search?'
         .concat(`q=${encodeURIComponent(p)}`)
         .concat(`&type=${type}`)
@@ -75,29 +72,36 @@ export async function Search(
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '')
         .concat(include_external ? `&include_external=${include_external}` : '');
 
-    return await tryCatch(defaultFetch<SearchResult>(url));
+    return await defaultFetch<SearchResult>(url);
 }
 
+/**
+ * 
+ * @param locale 
+ * @param limit 0-50
+ * @param offset 
+ * @returns 
+ */
 export async function GetCategories(
     locale: Locale,
     limit?: number,
     offset?: number
-): Promise<Result<{ categories: Paged<Category> }>> {
+): Promise<{ categories: Paged<Category> }> {
     const url = 'https://api.spotify.com/v1/browse/categories?'
         .concat(`locale=${locale}`)
         .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
 
-    return await tryCatch(defaultFetch<{ categories: Paged<Category> }>(url));
+    return await defaultFetch<{ categories: Paged<Category> }>(url);
 }
 
 export async function GetTracks(
-    market: ISO3166_1_Alpha_2,
-    ids: Array<string>
-): Promise<Result<{ tracks: Array<Track> }>> {
+    ids: Array<string>,
+    market?: ISO3166_1_Alpha_2,
+): Promise<{ tracks: Array<Track> }> {
     const url = 'https://api.spotify.com/v1/tracks?'
         .concat(`ids=${ids.join(',')}`)
-        .concat(`&market=${market}`);
+        .concat(market ? `&market=${market}` : '');
 
-    return await tryCatch(defaultFetch<{ tracks: Array<Track> }>(url));
+    return await defaultFetch<{ tracks: Array<Track> }>(url);
 }

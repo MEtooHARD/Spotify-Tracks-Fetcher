@@ -1,84 +1,75 @@
--- This script creates a table named 'tracks' to store data corresponding to
--- the Spotify Track object. It uses the Spotify ID as the primary key.
---
--- Data Types Chosen:
--- - TEXT for string-based IDs and URLs because their length can vary.
--- - VARCHAR(255) for names and titles for efficient indexing.
--- - INTEGER for numerical values like disc/track numbers and durations.
--- - BOOLEAN for true/false flags.
--- - TEXT[] for arrays of strings (e.g., available_markets).
--- - JSONB for complex nested objects (e.g., album, artists). JSONB is
---   chosen over JSON for its efficiency in storage and querying.
--- - TIMESTAMPTZ for date/time values to ensure time zone consistency.
-
--- Drop the table if it already exists to allow for a clean re-creation.
 DROP TABLE IF EXISTS tracks;
 
 CREATE TABLE tracks (
-    -- Core Track Information
-    id TEXT PRIMARY KEY,                      -- The unique Spotify ID for the track.
-    name VARCHAR(255) NOT NULL,               -- The name of the track.
-    href TEXT,                                -- A link to the Web API endpoint providing full details of the track.
-    uri TEXT,                                 -- The Spotify URI for the track.
-    -- type VARCHAR(50) DEFAULT 'track',         -- The object type, always 'track'.
-
-    -- Popularity and Duration
-    popularity INTEGER /* CHECK (popularity >= 0 AND popularity <= 100) */, -- The popularity of the track from 0 to 100.
-    duration_ms INTEGER,                      -- The track length in milliseconds.
-
-    -- Track Details
-    explicit BOOLEAN,                         -- Whether or not the track has explicit lyrics.
-    -- is_local BOOLEAN,                         -- Whether or not the track is from a local file.
-    -- is_playable BOOLEAN,                      -- Part of the response when Track Relinking is applied.
-    track_number INTEGER,                     -- The number of the track.
-    disc_number INTEGER,                      -- The disc number (usually 1).
-
-    -- Relational Data (stored as JSONB for flexibility)
-    -- Storing these as JSONB simplifies the schema. For advanced querying,
-    -- you could normalize these into their own tables (e.g., 'artists', 'albums')
-    -- and use foreign keys.
-    album VARCHAR(22),                               -- The album on which the track appears. (Simplified Album Object)
-    artists JSONB,                            -- The artists who performed the track. (Array of SimplifiedArtist Objects)
-
-    -- External IDs and URLs
-    -- external_ids JSONB,                       -- Known external IDs (isrc, ean, upc).
-    isrc VARCHAR(15),
-    ean VARCHAR(15),
-    upc VARCHAR(15) --,
-    -- external_urls TEXT,                      -- Known external URLs for this track.
-
-    -- Market and Restriction Information
-    -- available_markets TEXT[],                 -- An array of ISO 3166-1 alpha-2 country codes.
-    -- restrictions VARCHAR,                       -- Included when content restriction is applied.
-
-    -- Relinking Information
-    -- The 'linked_from' object contains information about the originally requested track.
-    -- linked_from VARCHAR(22),                        -- Present if the track is a relinked track.
-
-    -- Timestamps for Data Management
-    -- created_at TIMESTAMPTZ DEFAULT NOW(),      -- Timestamp when the record was created.
-    -- updated_at TIMESTAMPTZ DEFAULT NOW()       -- Timestamp when the record was last updated.
+    id TEXT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    href TEXT,
+    uri TEXT,
+    popularity INTEGER,
+    duration_ms INTEGER,
+    explicit BOOLEAN,
+    track_number INTEGER,
+    disc_number INTEGER,
+    album VARCHAR(22),
+    artists VARCHAR(22)[]
+    -- isrc VARCHAR(15),
+    -- ean VARCHAR(15),
+    -- upc VARCHAR(15)
 );
 
--- Create an index on the 'name' column to speed up search queries by track name.
 CREATE INDEX idx_tracks_name ON tracks(name);
-
--- Create an index on the 'popularity' column for efficient sorting and filtering.
 CREATE INDEX idx_tracks_popularity ON tracks(popularity);
 
--- A trigger to automatically update the 'updated_at' timestamp whenever a row is modified.
--- CREATE OR REPLACE FUNCTION update_modified_column()
--- RETURNS TRIGGER AS $$
--- BEGIN
---     NEW.updated_at = NOW();
---     RETURN NEW;
--- END;
--- $$ language 'plpgsql';
 
--- CREATE TRIGGER update_tracks_modtime
---     BEFORE UPDATE ON tracks
---     FOR EACH ROW
---     EXECUTE FUNCTION update_modified_column();
+-- DROP TYPE IF EXISTS album_type;
+CREATE TYPE album_type AS ENUM ('album', 'single', 'compilation');
 
--- A comment on the table to describe its purpose.
-COMMENT ON TABLE tracks IS 'Stores detailed information about individual tracks from the Spotify API.';
+DROP TABLE IF EXISTS albums;
+CREATE TABLE albums (
+    id TEXT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    type album_type NOT NULL,
+    total_tracks INTEGER,
+    href TEXT,
+    uri TEXT,
+    -- release_date VARCHAR(10),
+    -- release_date_precision VARCHAR(10),
+    -- images JSONB,
+    artists VARCHAR(22)[]
+    -- popularity INTEGER
+);
+
+CREATE INDEX idx_albums_name ON albums(name);
+CREATE INDEX idx_albums_type ON albums(type);
+-- CREATE INDEX idx_albums_total_tracks ON albums(total_tracks);
+
+
+DROP TABLE IF EXISTS artists;
+CREATE TABLE artists (
+    id TEXT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    href TEXT,
+    uri TEXT,
+    genres VARCHAR(50)[]
+    -- popularity INTEGER
+);
+
+CREATE INDEX idx_artists_name ON artists(name);
+CREATE INDEX idx_artists_genres ON artists(genres);
+
+
+DROP TABLE IF EXISTS playlists;
+CREATE TABLE playlists (
+    id TEXT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    -- href TEXT,
+    -- uri TEXT,
+    -- description TEXT,
+    -- public BOOLEAN,
+    -- collaborative BOOLEAN,
+    -- owner VARCHAR(22),
+    tracks VARCHAR(22)[]
+);
+
+CREATE INDEX idx_playlists_name ON playlists(name);
+-- CREATE INDEX idx_playlists_owner ON playlists(owner);
