@@ -1,6 +1,6 @@
 import { getToken } from ".";
 import { fitRangeInt } from "./helpers";
-import { Album, Artist, Category, ISO3166_1_Alpha_2, Locale, Paged, Result, SearchResult, SearchType, SpotifyToken, Track } from "./spotify_types";
+import { Album, Artist, Category, ISO3166_1_Alpha_2, Locale, Markets, Paged, Result, SearchResult, ResourceType, SpotifyToken, Track } from "./spotify_types";
 import { extractResponse, tryCatch } from "./wrappers";
 
 export const BearerToken = () => 'Bearer ' + getToken();
@@ -56,9 +56,25 @@ export async function GetArtists(
     return await defaultFetch<{ artists: Array<Artist> }>(url);
 }
 
+export async function GetArtistAlbums(
+    id: string,
+    include_groups?: 'album' | 'single' | 'appears_on' | 'compilation',
+    market?: Markets,
+    limit?: number,
+    offset?: number
+): Promise<Paged<Album>> {
+    const url = 'https://api.spotify.com/v1/artists/' + id + '/albums?'
+        .concat(include_groups ? `&include_groups=${include_groups}` : '')
+        .concat(market ? `&market=${market}` : '')
+        .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
+        .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
+
+    return await defaultFetch<Paged<Album>>(url);
+}
+
 export async function Search(
     p: string,
-    type: Array<SearchType>,
+    type: Array<ResourceType>,
     market?: ISO3166_1_Alpha_2,
     limit?: number,
     offset?: number,

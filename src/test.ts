@@ -1,8 +1,32 @@
-let count = 0;
-let target = 20;
-while (count < target) {
-    count++;
-    console.log(count);
+import { ExploreStack } from "./helpers";
+
+const stack = new ExploreStack();
+
+for (let i = 0; i < 10; i++) {
+    stack.add(`item-${i}`);
 }
 
-// 0, 1, 2, 3, 4, ..., 18, 19
+
+for (let i = 0; i < 5; i++) {
+    console.log(stack.pop())
+}
+
+console.log('---');
+
+for (let i = 10; i < 15; i++) {
+    stack.add(`item-${i}`);
+}
+
+for (let i = 0; i < 15; i++) {
+    console.log(stack.pop())
+}
+
+console.log('---');
+
+for (let i = 0; i < 10; i++) {
+    stack.add(`item-${i}`);
+}
+
+for (let i = 0; i < 5; i++) {
+    console.log(stack.pop())
+}

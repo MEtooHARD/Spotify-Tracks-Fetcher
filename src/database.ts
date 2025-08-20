@@ -1,10 +1,19 @@
-import { Insertable, Kysely, PostgresDialect } from 'kysely';
+import { Insertable, InsertResult, Kysely, PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
 import { Album, Artist, Playlist, Track } from './spotify_types';
 import { DB } from './types/db';
+import config from './config.json';
 
 export const db = new Kysely<DB>({
-    dialect: new PostgresDialect({ pool: new Pool({ connectionString: process.env.DATABASE_URL }) })
+    dialect: new PostgresDialect({
+        pool: new Pool({
+            host: config.database.host,
+            port: config.database.port,
+            database: config.database.database,
+            user: config.database.user,
+            password: config.database.password,
+        })
+    })
 });
 
 type TablesName = keyof DB;
@@ -45,7 +54,7 @@ type MapToMap<
     TargetMap extends { [K in keyof SourceMap]: any }
 > = { [K in keyof SourceMap]: TransFNArr<SourceMap[K], TargetMap[K]> };
 
-const transformers: MapToMap<SourceTypeMap, InsertableTypeMap> = {
+const transformers/* : MapToMap<SourceTypeMap, InsertableTypeMap> */ = {
     tracks: (track: Array<Track>): Array<Insertable<DB['tracks']>> => track.map(track => ({
         id: track.id,
         name: track.name,
@@ -83,28 +92,51 @@ const transformers: MapToMap<SourceTypeMap, InsertableTypeMap> = {
         name: playlist.name,
         tracks: playlist.tracks.items.map((item) => item.track.id).filter(Boolean),
     })),
-};
+} as const;
 
-export async function batchInsert(items: Track[], table: 'tracks'): Promise<number>;
 export async function batchInsert(items: Album[], table: 'albums'): Promise<number>;
 export async function batchInsert(items: Artist[], table: 'artists'): Promise<number>;
+export async function batchInsert(items: Track[], table: 'tracks'): Promise<number>;
 export async function batchInsert(items: Playlist[], table: 'playlists'): Promise<number>;
-export async function batchInsert<Table extends TablesName, I extends Array<SourceTypeMap[Table]>>(
-    items: I, table: Table
+export async function batchInsert<I extends Album[] | Artist[] | Track[] | Playlist[]>(
+    items: I, table: TablesName
 ): Promise<number> {
     if (items.length === 0) return 0;
 
     const ids = items.map((item) => item.id);
     const newIds = await filterExistingIds(table, ids);
-    const toInsert = items.filter((item) => newIds.includes(item.id));
+    const toInsert = items.filter((item) => newIds.includes(item.id)) as I;
 
     if (toInsert.length === 0) return 0;
 
-    const values = transformers[table](toInsert);
+    let res: InsertResult[];
 
-    const res = await db.insertInto(table).values(values).execute();
+    switch (table) {
+        case 'albums':
+            res = await db.insertInto(table)
+                .values(transformers.albums(toInsert as Album[]))
+                .execute();
+            break;
+        case 'artists':
+            res = await db.insertInto(table)
+                .values(transformers.artists(toInsert as Artist[]))
+                .execute();
+            break;
+        case 'tracks':
+            res = await db.insertInto(table)
+                .values(transformers.tracks(toInsert as Track[]))
+                .execute();
+            break;
+        case 'playlists':
+            res = await db.insertInto(table)
+                .values(transformers.playlists(toInsert as Playlist[]))
+                .execute();
+            break;
+        default:
+            throw new Error(`Unsupported table: ${table}`);
+    }
 
-    return res.length;
+    return Number(res[0]?.numInsertedOrUpdatedRows);
 }
 
 export async function getDatabaseStats(): Promise<void> {

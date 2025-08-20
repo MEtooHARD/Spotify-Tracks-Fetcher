@@ -12,21 +12,15 @@ export async function extractResponse<T = any>(
     fetchResponse: Promise<Response>
 ): Promise<T> {
     const response = await fetchResponse;
-    let result;
-    try {
-        result = await response.json();
-    } catch {
+
+    const [json, jsonErr] = await tryCatch(response.json());
+
+    if (!jsonErr && response.ok) return json;
+
+    if (response.status !== 429)
         console.log(response);
-    } finally {
-        if (response.ok) return result;
-        if (!result) result = await response.text();
 
-        const errorMessage = typeof result === 'string'
-            ? result
-            : result.error?.message || JSON.stringify(result);
-
-        throw new HttpError(errorMessage, response.status, response.headers, result);
-    }
+    throw new HttpError('failed parse response', response.status, response.headers, response);
 }
 
 // in your types.ts or a new errors.ts file
@@ -55,22 +49,31 @@ export async function RateLimitCircuit<T>(
 ): Promise<T> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            return await promiseFn();
+            const result = await promiseFn();
+            if (attempt > 1) {
+                logger(chalk.green(`[Success] ${message} succeeded on attempt ${attempt}`));
+            }
+            return result;
         } catch (error) {
             if (error instanceof HttpError && error.status === 429) {
                 const retryAfterHeader = error.headers.get('Retry-After');
                 const delaySeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 3;
-                const delayMs = Math.round((isNaN(delaySeconds) ? 3_000 : delaySeconds * 1000) + 5);
+                const delayMs = Math.round((isNaN(delaySeconds) ? 3_000 : delaySeconds * 1000) + 1_000);
+
+                console.log(error.body)
 
                 logger(chalk.yellow(`[Rate Limit] ${message} Attempt ${chalk.cyan(attempt)}. Waiting ${chalk.cyan(delayMs / 1000)} sec.`));
 
-                if (attempt === maxRetries) throw error;
+                if (attempt === maxRetries) {
+                    logger(chalk.red(`[Rate Limit] ${message} Max retries reached, throwing error`));
+                    throw error;
+                }
 
                 await wait(delayMs);
                 continue;
             }
 
-            logger(`[Error] Non-rate-limit error on attempt ${attempt}:`, (error as any)?.message);
+            logger(chalk.red(`[Error] ${message} Non-rate-limit error on attempt ${attempt}:`), (error as any)?.message);
             throw error;
         }
     }

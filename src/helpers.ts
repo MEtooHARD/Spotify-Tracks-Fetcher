@@ -74,6 +74,14 @@ export class ExploreStack {
     public has(id: string): boolean {
         return this.AllItem.has(id);
     }
+
+    public size(): number {
+        return this.AllItem.size;
+    }
+
+    public unexplored(): number {
+        return this.UnexploredItems.length;
+    }
 }
 
 export class ObjectExploreStack<T extends { id: string }> {
@@ -108,4 +116,11 @@ export class ObjectExploreStack<T extends { id: string }> {
         return this.AllItem.has(id);
     }
 
+    public size(): number {
+        return this.AllItem.size;
+    }
+
+    public unexplored(): number {
+        return this.UnexploredObjects.length;
+    }
 }
