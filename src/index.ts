@@ -1,17 +1,22 @@
 import chalk from 'chalk';
-import { defaultFetch, GetAlbums, GetCategories, GetToken, GetTracks, Search } from './api_functions';
+import { defaultFetch, GetAlbums, GetArtistAlbums, GetArtists, GetCategories, GetToken, GetTracks, Search } from './api_functions';
 import config from './config.json';
-import {
-    batchInsertAlbums,
-    getDatabaseStats
-} from './database';
+import { batchInsert, getDatabaseStats } from './database';
 import { countSuccess, ExploreStack, getAmount, ObjectExploreStack } from './helpers';
-import { Task, TaskGenerator, TaskRunner } from './task';
 import { Album, Artist, Category, Paged, Playlist, SearchResult, SimplifiedAlbum, Track } from './spotify_types';
+import { Task, TaskGenerator, TaskRunner } from './task';
 import { RateLimitCircuit, tryCatch } from './wrappers';
+import { FailureBackup } from './types';
 
 let token: string = '';
 export function getToken(): string { return token; };
+
+const backup: FailureBackup = {
+    albums: [],
+    artists: [],
+    tracks: [],
+    playlists: []
+};
 
 const AlbumIDs = new ExploreStack();
 const ArtistIDs = new ExploreStack();
@@ -22,11 +27,20 @@ const Albums = new ObjectExploreStack<Album>();
 const Tracks = new ObjectExploreStack<Track>();
 const Playlists = new ObjectExploreStack<Playlist>();
 
+const Fetched = {
+    album: 0,
+    artist: 0,
+    track: 0,
+    playlist: 0
+}
+
 const Genres = new ExploreStack();
 const Categories = new ExploreStack();
 const SearchQueries = new ExploreStack();
 
 const addedH = chalk.green('[added]');
+const dbSuccessH = chalk.greenBright('[database]');
+const dbErrorH = chalk.redBright('[database error]');
 
 async function main() {
     await login();
@@ -40,11 +54,14 @@ async function main() {
     const runner = new TaskRunner(
         [
             TrackTask.getInstance(),
-            TrackIDTask.getInstance(),
             AlbumTask.getInstance(),
+            ArtistTask.getInstance(),
+            PlaylistTask.getInstance(),
+            TrackIDTask.getInstance(),
             AlbumIDTask.getInstance(),
+            ArtistIDTask.getInstance(),
             SearchTask.getInstance(),
-        ], 5
+        ], 1
     );
 
     const [res, err] = await tryCatch(GetCategories('zh_TW', 50));
@@ -63,15 +80,46 @@ async function main() {
 
     // Set up periodic database statistics reporting
     const statsInterval = setInterval(async () => {
+        const memUsage = process.memoryUsage();
+        const timestamp = new Date().toISOString();
+
         if (!runner.isRunning()) {
             console.log(chalk.blue('[database]'), 'Final state:');
+            console.log(chalk.gray('[system]'), 'Time:', timestamp);
+            console.log(chalk.gray('[system]'), 'Memory (MB):', {
+                rss: Math.round(memUsage.rss / 1024 / 1024),
+                heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+                heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+                external: Math.round(memUsage.external / 1024 / 1024)
+            });
             await getDatabaseStats();
             clearInterval(statsInterval);
         } else {
             console.log(chalk.blue('[database]'), 'Current state:');
+            console.log(chalk.gray('[system]'), 'Time:', timestamp);
+            console.log(chalk.gray('[system]'), 'Memory (MB):', {
+                rss: Math.round(memUsage.rss / 1024 / 1024),
+                heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+                heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+                external: Math.round(memUsage.external / 1024 / 1024)
+            });
+            console.log(chalk.gray('[system]'), 'Active tasks:', runner.isRunning() ? 'Running' : 'Stopped');
+            console.log(chalk.gray('[system]'), 'Stack status (unexplored/total):');
+            console.log(chalk.gray('  IDs:'), {
+                Albums: `${AlbumIDs.unexplored()}/${AlbumIDs.size()}`,
+                Artists: `${ArtistIDs.unexplored()}/${ArtistIDs.size()}`,
+                Tracks: `${TrackIDs.unexplored()}/${TrackIDs.size()}`
+            });
+            console.log(chalk.gray('  Objects:'), {
+                Albums: `${Albums.unexplored()}/${Albums.size()}`,
+                Artists: `${Artists.unexplored()}/${Artists.size()}`,
+                Tracks: `${Tracks.unexplored()}/${Tracks.size()}`,
+                Playlists: `${Playlists.unexplored()}/${Playlists.size()}`
+            });
+            console.log(chalk.gray('  Queries:'), `${SearchQueries.unexplored()}/${SearchQueries.size()}`);
             await getDatabaseStats();
         }
-    }, 30000); // Report every 30 seconds
+    }, 10_000); // Report every 10 seconds
 
     runner.trigger();
 }
@@ -147,7 +195,12 @@ class AlbumIDTask extends TaskGenerator {
                 }
                 const valid = res.albums.filter(a => a !== null && a !== undefined);
 
-                await batchInsertAlbums(valid);
+                const [stCnt, stErr] = await tryCatch(batchInsert(valid, 'albums'));
+                if (stErr) {
+                    log(dbErrorH, 'error inserting albums:', stErr);
+                    backup.albums.push(...valid);
+                }
+                if (stCnt) log(dbSuccessH, 'stored:', stCnt, '/', valid.length, 'albums');
 
                 const added = Albums.addAll(valid);
                 log(chalk.green('[albums]'), 'processed:', valid.length, 'added to queue:', added);
@@ -163,10 +216,6 @@ class AlbumTask extends TaskGenerator {
         return {
             name: 'album ' + album.name,
             task: (async (log) => {
-                // Store album to database
-                await batchInsertAlbums([album]);
-
-                // Continue collecting related IDs
                 ArtistIDs.addAll(album.artists.map(a => a.id));
                 const [simpTracks, err] = await tryCatch(FetchAllPagedItem<any>(album.tracks, undefined, log));
                 if (err) {
@@ -174,6 +223,64 @@ class AlbumTask extends TaskGenerator {
                     return;
                 }
                 log('added', TrackIDs.addAll(simpTracks.map((t: any) => t.id)), 'track IDs');
+            })
+        }
+    }
+}
+
+class ArtistIDTask extends TaskGenerator {
+    public getTask(): Task | undefined {
+        const artistID = ArtistIDs.pop();
+        if (!artistID) return;
+        return {
+            name: 'fetch artists',
+            task: (async (log) => {
+                const artistIDs = getAmount(ArtistIDs, 20, [artistID]);
+
+                const [res, err] = await tryCatch(RateLimitCircuit(() => GetArtists(artistIDs), 5, chalk.blue('fetch artists'), log));
+                if (err) {
+                    log('Error in fetch artists:', err);
+                    return;
+                }
+
+                Genres.addAll(res.artists.flatMap(a => a.genres));
+                const [stCnt, stErr] = await tryCatch(batchInsert(res.artists, 'artists'));
+                if (stErr) {
+                    log(dbErrorH, 'error inserting artists:', stErr);
+                    backup.artists.push(...res.artists);
+                }
+                if (stCnt) log(dbSuccessH, 'stored:', stCnt, '/', res.artists.length, 'artists');
+
+                log('added', Artists.addAll(res.artists), 'artist IDs');
+            })
+        }
+    }
+}
+
+class ArtistTask extends TaskGenerator {
+    public getTask(): Task | undefined {
+        const artist = Artists.pop();
+        if (!artist) return;
+        return {
+            name: 'artist ' + artist.name,
+            task: (async (log) => {
+                // Store artist to database
+                // await batchInsert([artist], 'artists');
+
+                const [paged, err] = await tryCatch(RateLimitCircuit(() => GetArtistAlbums(
+                    artist.id, undefined, undefined, 50)));
+
+                if (err) {
+                    log('Error on fetching artist albums page:', err);
+                    return;
+                }
+
+                const [albums, err2] = await tryCatch(FetchAllPagedItem<SimplifiedAlbum>(paged, undefined, log));
+                if (err2) {
+                    log('Error on fetching artist albums:', err2);
+                    return;
+                }
+                log('added', AlbumIDs.addAll(albums.map((a: any) => a.id)), 'album IDs');
             })
         }
     }
@@ -203,12 +310,43 @@ class TrackIDTask extends TaskGenerator {
             task: (async (log) => {
                 const trackIDs = getAmount(TrackIDs, 20, [trackID]);
 
-                const [res, err] = await tryCatch(RateLimitCircuit(() => GetTracks(trackIDs)));
+                const [res, err] = await tryCatch(RateLimitCircuit(() => GetTracks(trackIDs), 5, chalk.blue('fetch tracks'), log));
                 if (err) {
                     log('Error in fetch tracks:', err);
                     return;
                 }
+                const [stCnt, err2] = await tryCatch(batchInsert(res.tracks, 'tracks'));
+                if (err2) {
+                    log(dbErrorH, 'error inserting tracks:', err2);
+                    backup.tracks.push(...res.tracks);
+                }
+                if (stCnt) log(dbSuccessH, 'stored:', stCnt, '/', res.tracks.length, 'tracks');
+
                 log('added', Tracks.addAll(res.tracks), 'track IDs');
+            })
+        }
+    }
+}
+
+class PlaylistTask extends TaskGenerator {
+    public getTask(): Task | undefined {
+        const playlist = Playlists.pop();
+        if (!playlist) return;
+        return {
+            name: 'playlist ' + playlist.name,
+            task: (async (log) => {
+                const [tracks, err] = await tryCatch(FetchAllPagedItem(playlist.tracks, undefined, log));
+
+                if (err) {
+                    log('Error on fetching playlist tracks:', err);
+                    return;
+                }
+
+                const c = TrackIDs.addAll(
+                    tracks.filter(t => t.track.type === 'track').map(t => t.track.id)
+                );
+
+                log('added', c, 'track IDs');
             })
         }
     }
@@ -258,7 +396,7 @@ class SearchTask extends TaskGenerator {
 }
 
 async function login() {
-    const [tokenRes, err1] = await GetToken(config.spotify.clientID, config.spotify.secret);
+    const [tokenRes, err1] = await GetToken(config.spotify2.clientID, config.spotify2.secret);
     if (err1) {
         console.log('failed fetching token');
         return;

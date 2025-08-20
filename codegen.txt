@@ -1,1 +1,16 @@
 npx kysely-codegen --dialect=postgres --out-file=src/types/db.ts
+
+chcp 65001
+
+
+
+SELECT 'tracks' AS table_name, COUNT(*) AS exact_count FROM tracks
+UNION ALL
+SELECT 'albums', COUNT(*) FROM albums
+UNION ALL
+SELECT 'playlists', COUNT(*) FROM playlists
+UNION ALL
+SELECT 'artists', COUNT(*) FROM artists;
+
+
+SELECT 'tracks' AS table_name, COUNT(*) AS exact_count FROM tracks UNION ALL SELECT 'albums', COUNT(*) FROM albums UNION ALL SELECT 'playlists', COUNT(*) FROM playlists UNION ALL SELECT 'artists', COUNT(*) FROM artists;

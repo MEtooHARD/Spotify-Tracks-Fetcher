@@ -76,7 +76,7 @@ export type DatePrecision = 'day' | 'month' | 'year';
 
 export type RestrictionReason = 'market' | 'product' | 'explicit';
 
-export type SearchType = "album" | "artist" | "playlist" | "track" | "show" | "episode" | "audiobook";
+export type ResourceType = "album" | "artist" | "playlist" | "track" | "show" | "episode" | "audiobook";
 
 export type Restrictions = {
     reason: RestrictionReason;
@@ -193,7 +193,7 @@ export interface PlaylistTrack {
         uri: string;
     };
     is_local: boolean;
-    track: Track;
+    track: Track | { type: 'episode', id: string };
 }
 
 export interface Track {

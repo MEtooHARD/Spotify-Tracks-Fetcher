@@ -13,7 +13,7 @@ export class TaskRunner {
         private readonly generators: Array<TaskGenerator>,
         private readonly limit: number
     ) {
-        this.SIDcap = Math.max(999, limit);
+        this.SIDcap = Math.max(999999999999999999999, limit);
     }
 
     public isRunning(): boolean { return this.running; }
@@ -45,8 +45,14 @@ export class TaskRunner {
                 const tag = color(`[task ${SID}]`);
                 console.log(chalk.cyanBright('[task runner]'), 'start', tag, task.name);
                 task.task((...msg) => console.log(tag, ...msg))
-                    .catch(e => console.error(tag, 'error:', e))
+                    .then(() => {
+                        console.log(tag, chalk.green('completed'));
+                    })
+                    .catch(e => {
+                        console.error(tag, chalk.red('error:'), e);
+                    })
                     .finally(() => {
+                        console.log(tag, chalk.gray('finished, activeTasks:', this.activeTasks - 1));
                         this.activeTasks--;
                         this.runTask();
                     });
