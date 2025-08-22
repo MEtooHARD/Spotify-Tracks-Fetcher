@@ -7,6 +7,7 @@ import { Album, Artist, Category, Paged, Playlist, SearchResult, SimplifiedAlbum
 import { Task, TaskGenerator, TaskRunner } from './task';
 import { RateLimitCircuit, tryCatch } from './wrappers';
 import { FailureBackup } from './types';
+import { creds } from './utility';
 
 let token: string = '';
 export function getToken(): string { return token; };
@@ -396,7 +397,7 @@ class SearchTask extends TaskGenerator {
 }
 
 async function login() {
-    const [tokenRes, err1] = await GetToken(config.spotify2.clientID, config.spotify2.secret);
+    const [tokenRes, err1] = await GetToken(creds[0]!.clientID, creds[0]!.secret);
     if (err1) {
         console.log('failed fetching token');
         return;

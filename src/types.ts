@@ -6,3 +6,8 @@ export type FailureBackup = {
     tracks: Track[],
     playlists: Playlist[]
 }
+
+export type Cred = {
+    clientID: string,
+    secret: string
+}
