@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { TokenManager } from "../api/token_manager";
 import { randomChalk } from "../utils/helpers";
 import { LogCapture } from "../utils/log_capture";
 import { Singleton } from "../utils/wrapper";
@@ -143,9 +144,10 @@ export class TaskRunner {
                     errorType = 'AUTH_FAILED';
                 } else if (e?.code === 'ECONNREFUSED' || e?.code === 'ETIMEDOUT') {
                     errorType = 'NETWORK_ERROR';
-                } else if (e?.message) {
-                    // 檢測「所有 credentials 都被 ban」的情況
-                    if (e.message.includes('All credentials banned')) {
+                } else {
+                    // 檢查是否所有 credentials 都被 ban
+                    const tokenMgr = TokenManager.getInstance();
+                    if (tokenMgr.isAllBanned()) {
                         errorType = 'TOKEN_EXHAUSTED';
                         shouldCountAsFailure = false;  // 不計為失敗，等待恢復
 
@@ -153,7 +155,7 @@ export class TaskRunner {
                         if (!this.paused) {
                             this.pause();
                         }
-                    } else {
+                    } else if (e?.message) {
                         errorType = 'APPLICATION_ERROR';
                     }
                 }

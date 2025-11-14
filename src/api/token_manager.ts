@@ -64,13 +64,20 @@ export class TokenManager extends Singleton<TokenManager>() {
         // 嘗試從 token-status.json 恢復之前的 ban 狀態
         await this.loadStatusFromFile();
 
+        // 重置 allBannedState - 如果現在有任何 credential 可用，就不應該認為全員 ban 了
+        // 因為可能加入了新的未曾被 ban 過的 credentials
+        const currentlyAllBanned = this.isAllBanned();
+        if (!currentlyAllBanned) {
+            this.allBannedState = false;
+        }
+
         // 嘗試獲取 token
         let success = await this.refreshToken();
 
         // 如果初始化失敗（所有 credentials 都被 ban），允許系統繼續初始化
         // Recovery Monitor 會在有 credential 恢復時自動嘗試更新 token
         if (!success) {
-            const isAllBanned = this.checkAllBanned();
+            const isAllBanned = this.isAllBanned();
             if (isAllBanned) {
                 console.warn(chalk.yellow('[TokenManager]'),
                     'All credentials are banned, will retry when recovery detected');
@@ -348,7 +355,7 @@ export class TokenManager extends Singleton<TokenManager>() {
     /**
      * 檢查是否全員被 ban
      */
-    private checkAllBanned(): boolean {
+    public isAllBanned(): boolean {
         const now = Date.now();
         return this.credentialStatus.every(s => s.bannedUntil > now);
     }
@@ -358,7 +365,7 @@ export class TokenManager extends Singleton<TokenManager>() {
      */
     private startRecoveryMonitor(): void {
         this.recoveryCheckTimer = setInterval(() => {
-            const isAllBanned = this.checkAllBanned();
+            const isAllBanned = this.isAllBanned();
 
             if (this.allBannedState && !isAllBanned) {
                 // 從全員 ban 恢復
@@ -509,9 +516,8 @@ export class TokenManager extends Singleton<TokenManager>() {
             // 恢復全員 ban 狀態
             if (typeof status.allBanned === 'boolean') {
                 this.allBannedState = status.allBanned;
-                if (this.allBannedState) {
-                    console.warn(chalk.red('[TokenManager]'), 'All credentials were banned, waiting for recovery...');
-                }
+                // 不在這裡打印警告，因為可能新增了可用的 credentials
+                // 會在 initialize() 中根據實際情況決定是否打印
             }
         } catch (error) {
             // 文件不存在或格式錯誤是正常的（首次運行）
