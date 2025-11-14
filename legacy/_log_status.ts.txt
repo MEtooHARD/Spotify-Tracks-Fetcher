@@ -1,0 +1,46 @@
+import chalk from "chalk";
+import { TaskRunner } from "./taskrunner_";
+import { logDatabaseStats } from "./database";
+// import { Albums, Artists, Playlists, Tracks } from ".";
+
+// export async function logStatus(runner: TaskRunner) {
+//     const memUsage = process.memoryUsage();
+//     const timestamp = new Date().toISOString();
+
+//     if (!runner.isRunning()) {
+//         console.log(chalk.blue('[database]'), 'Final state:');
+//         console.log(chalk.gray('[system]'), 'Time:', timestamp);
+//         console.log(chalk.gray('[system]'), 'Memory (MB):', {
+//             rss: Math.round(memUsage.rss / 1024 / 1024),
+//             heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+//             heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+//             external: Math.round(memUsage.external / 1024 / 1024)
+//         });
+//         await logDatabaseStats();
+//         // clearInterval(statsInterval);
+//     } else {
+//         console.log(chalk.blue('[database]'), 'Current state:');
+//         console.log(chalk.gray('[system]'), 'Time:', timestamp);
+//         console.log(chalk.gray('[system]'), 'Memory (MB):', {
+//             rss: Math.round(memUsage.rss / 1024 / 1024),
+//             heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+//             heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+//             external: Math.round(memUsage.external / 1024 / 1024)
+//         });
+//         console.log(chalk.gray('[system]'), 'Active tasks:', runner.isRunning() ? 'Running' : 'Stopped');
+//         console.log(chalk.gray('[system]'), 'Stack status (unexplored/total):');
+//         // console.log(chalk.gray('  IDs:'), {
+//         //     Albums: `${AlbumIDs.unexplored()}/${AlbumIDs.size()}`,
+//         //     Artists: `${ArtistIDs.unexplored()}/${ArtistIDs.size()}`,
+//         //     Tracks: `${TrackIDs.unexplored()}/${TrackIDs.size()}`
+//         // });
+//         console.log(chalk.gray('  Objects:'), {
+//             Albums: `${Albums.unexplored()}/${Albums.size()}`,
+//             Artists: `${Artists.unexplored()}/${Artists.size()}`,
+//             Tracks: `${Tracks.unexplored()}/${Tracks.size()}`,
+//             Playlists: `${Playlists.unexplored()}/${Playlists.size()}`
+//         });
+//         // console.log(chalk.gray('  Queries:'), `${SearchQueries.unexplored()}/${SearchQueries.size()}`);
+//         await logDatabaseStats();
+//     }
+// }

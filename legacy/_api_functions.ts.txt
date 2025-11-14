@@ -1,0 +1,199 @@
+import { getToken } from "./auth";
+import { fitRangeInt } from "./helpers";
+import {
+    Album, Artist, Category, ExternalUrls, ISO3166_1_Alpha_2, Locale,
+    Markets, Paged, Playlist, ResourceType, Result, SearchResult, SpotifyToken, Track
+} from './spotify_types';
+import { TokenManager } from "./token_manager";
+import { extractResponse, tryCatch } from "./wrappers";
+
+export const BearerToken = () => 'Bearer ' + getToken();
+
+export async function BearerFetch<T>(url: string): Promise<T> {
+    const tokenManager = TokenManager.getInstance();
+
+    // 記錄 token 使用
+    tokenManager.recordUsage();
+
+    try {
+        return await extractResponse<T>(
+            fetch(url, {
+                method: 'GET',
+                headers: { Authorization: BearerToken() }
+            })
+        );
+    } catch (e) {
+        // console.log('Error occurred on:', url);
+        throw e;
+    }
+}
+
+/**
+ * RLCRetryFetch - Spotify API 專用 fetch（包含 429 處理）
+ * 在 defaultFetch 之上包裝 429 處理邏輯
+ * - 遇到 429 自動切換 credential
+ * - 切換後重試一次，若還是 429 直接拋錯
+ */
+export async function RLCRetryFetch<T>(url: string): Promise<T> {
+    const tokenManager = TokenManager.getInstance();
+
+    try {
+        return await BearerFetch<T>(url);
+    } catch (error: any) {
+        // 處理 429 Rate Limit
+        if (error?.status === 429) {
+            const retryAfter = error.headers?.get?.('Retry-After');
+            const delaySeconds = retryAfter ? parseInt(retryAfter, 10) : 0;
+
+            console.warn(`[spotifyFetch] Rate limited (429), retry-after: ${delaySeconds}s`);
+
+            // 記錄此 credential 被 ban 的時間
+            tokenManager.recordRateLimit(delaySeconds);
+
+            // 立即切換 credential
+            const switched = await tokenManager.switchCredential();
+
+            if (!switched) {
+                // 無法切換（所有 credentials 都被 ban）
+                console.error(`[spotifyFetch] All credentials are rate limited`);
+                throw new Error(`All credentials banned (retry after ${delaySeconds}s)`);
+            }
+
+            console.log(`[spotifyFetch] Switched credential, retrying once...`);
+
+            // 用新 token 重試一次
+            try {
+                return await BearerFetch<T>(url);
+            } catch (retryError: any) {
+                // 如果還是 429，代表新 token 也不能用了
+                if (retryError?.status === 429) {
+                    const newRetryAfter = retryError.headers?.get?.('Retry-After');
+                    const newDelaySeconds = newRetryAfter ? parseInt(newRetryAfter, 10) : 0;
+
+                    console.error(`[spotifyFetch] New credential also rate limited (429)`);
+                    tokenManager.recordRateLimit(newDelaySeconds);
+
+                    throw new Error(`Switched credential still banned (retry after ${newDelaySeconds}s)`);
+                }
+                // 其他錯誤直接拋出
+                throw retryError;
+            }
+        }
+
+        // 其他錯誤直接拋出
+        throw error;
+    }
+}
+
+export async function GetToken(
+    ID: string,
+    secret: string
+): Promise<Result<SpotifyToken>> {
+    return await tryCatch<SpotifyToken>(extractResponse<SpotifyToken>(fetch(
+        'https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: {
+            "Content-type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: ID,
+            client_secret: secret
+        })
+    })));
+}
+
+export async function GetAlbums(
+    ids: Array<string>,
+    market?: ISO3166_1_Alpha_2
+): Promise<{ albums: Array<Album> }> {
+    const url = 'https://api.spotify.com/v1/albums?'
+        .concat(`ids=${ids.join(',')}`)
+        .concat(market ? `&market=${market}` : '');
+    return await RLCRetryFetch<{ albums: Array<Album> }>(url);
+}
+
+export async function GetArtists(
+    ids: Array<string>,
+): Promise<{ artists: Array<Artist> }> {
+    const url = 'https://api.spotify.com/v1/artists?'
+        .concat(`ids=${ids.join(',')}`);
+
+    return await RLCRetryFetch<{ artists: Array<Artist> }>(url);
+}
+
+export async function GetArtistAlbums(
+    id: string,
+    include_groups?: 'album' | 'single' | 'appears_on' | 'compilation',
+    market?: Markets,
+    limit?: number,
+    offset?: number
+): Promise<Paged<Album>> {
+    const url = 'https://api.spotify.com/v1/artists/' + id + '/albums?'
+        .concat(include_groups ? `&include_groups=${include_groups}` : '')
+        .concat(market ? `&market=${market}` : '')
+        .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
+        .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
+
+    return await RLCRetryFetch<Paged<Album>>(url);
+}
+
+export async function Search(
+    q: string,
+    type: Array<ResourceType>,
+    market?: ISO3166_1_Alpha_2,
+    limit?: number,
+    offset?: number,
+    include_external?: 'audio'
+): Promise<SearchResult> {
+    const url = 'https://api.spotify.com/v1/search?'
+        .concat(`q=${encodeURIComponent(q)}`)
+        .concat(`&type=${type}`)
+        .concat(market ? `&market=${market}` : '')
+        .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
+        .concat(offset ? `&offset=${fitRangeInt(offset)}` : '')
+        .concat(include_external ? `&include_external=${include_external}` : '');
+
+    return await RLCRetryFetch<SearchResult>(url);
+}
+
+/**
+ * 
+ * @param locale 
+ * @param limit 0-50
+ * @param offset 
+ * @returns 
+ */
+export async function GetCategories(
+    locale: Locale,
+    limit?: number,
+    offset?: number
+): Promise<{ categories: Paged<Category> }> {
+    const url = 'https://api.spotify.com/v1/browse/categories?'
+        .concat(`locale=${locale}`)
+        .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
+        .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
+
+    return await RLCRetryFetch<{ categories: Paged<Category> }>(url);
+}
+
+export async function GetTracks(
+    ids: Array<string>,
+    market?: ISO3166_1_Alpha_2,
+): Promise<{ tracks: Array<Track> }> {
+    const url = 'https://api.spotify.com/v1/tracks?'
+        .concat(`ids=${ids.join(',')}`)
+        .concat(market ? `&market=${market}` : '');
+
+    return await RLCRetryFetch<{ tracks: Array<Track> }>(url);
+}
+
+export async function GetPlaylist(
+    id: string,
+    market?: ISO3166_1_Alpha_2
+): Promise<Playlist> {
+    const url = `https://api.spotify.com/v1/playlists/${id}`
+        .concat(market ? `?market=${market}` : '');
+
+    return await RLCRetryFetch<Playlist>(url);
+}

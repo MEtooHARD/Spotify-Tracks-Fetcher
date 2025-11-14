@@ -1,7 +1,7 @@
-npx kysely-codegen --dialect=postgres --out-file=src/types/db.ts
+npx kysely-codegen --dialect=postgres --out-file=src/database/schema.ts
 
 chcp 65001
-
+set PGCLIENTENCODING=UTF8
 
 
 SELECT 'tracks' AS table_name, COUNT(*) AS exact_count FROM tracks

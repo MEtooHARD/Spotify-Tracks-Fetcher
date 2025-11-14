@@ -9,5 +9,9 @@ export type FailureBackup = {
 
 export type Cred = {
     clientID: string,
-    secret: string
+    secret: string,
+    rate_limit: {
+        limited: boolean,
+        target_time: number
+    }
 }

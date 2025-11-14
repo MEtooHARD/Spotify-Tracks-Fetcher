@@ -41,23 +41,25 @@ export const randomChalk = (): ChalkInstance => {
     return chalk.hex('#' + randomColor.padStart(6, '0'));
 };
 
+type ID = string;
+
 export class ExploreStack {
     private readonly UnexploredItems: Array<string>;
-    private readonly AllItem: Set<string>;
+    private readonly AllItem: Set<ID>;
 
     constructor() {
         this.UnexploredItems = [];
-        this.AllItem = new Set<string>();
+        this.AllItem = new Set<ID>();
     }
 
-    public add(item: string): boolean {
+    public add(item: ID): boolean {
         if (this.has(item)) return false;
         this.UnexploredItems.push(item);
         this.AllItem.add(item);
         return true;
     }
 
-    public addAll(items: Array<string>): number {
+    public addAll(items: Array<ID>): number {
         let count = 0;
         for (const item of items)
             if (this.add(item)) count++;
@@ -65,13 +67,13 @@ export class ExploreStack {
         return count;
     }
 
-    public pop(): string | null {
+    public pop(): ID | null {
         if (this.UnexploredItems.length === 0) return null;
         const item = this.UnexploredItems.pop()!;
         return item;
     }
 
-    public has(id: string): boolean {
+    public has(id: ID): boolean {
         return this.AllItem.has(id);
     }
 

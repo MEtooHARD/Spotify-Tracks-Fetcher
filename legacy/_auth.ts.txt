@@ -1,0 +1,9 @@
+let token: string = '';
+
+export function getToken(): string { 
+    return token; 
+}
+
+export function setToken(newToken: string): void {
+    token = newToken;
+}

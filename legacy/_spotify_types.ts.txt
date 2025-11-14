@@ -106,7 +106,7 @@ export interface Paged<T> {
     offset: number;
     previous?: string;
     total: number;
-    items: Array<T>;
+    items: Array<T | null>;
 }
 
 export interface Album {
@@ -193,7 +193,7 @@ export interface PlaylistTrack {
         uri: string;
     };
     is_local: boolean;
-    track: Track | { type: 'episode', id: string };
+    track: Track | { type: 'episode', id: string } | null;
 }
 
 export interface Track {
@@ -220,11 +220,18 @@ export interface Track {
 
 export interface SimplifiedTrack extends Omit<Track, 'album' | 'external_ids' | 'popularity'> { }
 
+export interface SimplifiedPlaylist extends Omit<Playlist, 'tracks'> {
+    tracks: {
+        href: string;
+        total: number;
+    };
+}
+
 export interface SearchResult {
     tracks?: Paged<Track>;
     artists?: Paged<Artist>;
     albums?: Paged<SimplifiedAlbum>;
-    playlists?: Paged<Playlist>;
+    playlists?: Paged<SimplifiedPlaylist>;
     shows: null;
     episodes: null;
     audiobooks: null;
@@ -232,3 +239,5 @@ export interface SearchResult {
 
 export type SpotifyResource = Artist | Album | Playlist | Track;
 export type SpotifySimplified = SimplifiedAlbum | SimplifiedArtist | SimplifiedTrack;
+
+

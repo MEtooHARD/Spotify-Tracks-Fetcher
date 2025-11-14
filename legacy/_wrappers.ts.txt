@@ -1,0 +1,52 @@
+import { Result } from "./spotify_types";
+
+export async function tryCatch<T, E = Error>(
+    promise: Promise<T>
+): Promise<Result<T, E>> {
+    try { return [await promise, null]; }
+    catch (e) { return [null, e as E]; }
+}
+
+export async function extractResponse<T = any>(
+    fetchResponse: Promise<Response>
+): Promise<T> {
+    const response = await fetchResponse;
+
+    const [json, jsonErr] = await tryCatch(response.json());
+
+    if (!jsonErr && response.ok) return json;
+
+    if (response.status !== 429)
+        console.log(response);
+
+    throw new HttpError('failed parse response', response.status, response.headers, response);
+}
+
+// in your types.ts or a new errors.ts file
+export class HttpError extends Error {
+    status: number;
+    headers: Headers;
+    body: any;
+
+    constructor(message: string, status: number, headers: Headers, body: any) {
+        super(message);
+        this.name = 'HttpError';
+        this.status = status;
+        this.headers = headers;
+        this.body = body;
+    }
+}
+
+export function Singleton<T>() {
+    return class {
+        static instance: T | undefined;
+
+        protected constructor() { }
+
+        public static getInstance(): T {
+            if (!this.instance) this.instance = new this() as T;
+
+            return this.instance;
+        }
+    }
+}

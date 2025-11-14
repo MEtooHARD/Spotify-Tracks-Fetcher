@@ -1,41 +1,6 @@
-import { getToken } from ".";
-import { fitRangeInt } from "./helpers";
-import { Album, Artist, Category, ISO3166_1_Alpha_2, Locale, Markets, Paged, Result, SearchResult, ResourceType, SpotifyToken, Track } from "./spotify_types";
-import { extractResponse, tryCatch } from "./wrappers";
-
-export const BearerToken = () => 'Bearer ' + getToken();
-
-export async function defaultFetch<T>(url: string): Promise<T> {
-    try {
-        return await extractResponse<T>(
-            fetch(url, {
-                method: 'GET',
-                headers: { Authorization: BearerToken() }
-            })
-        );
-    } catch (e) {
-        // console.log('Error occurred on:', url);
-        throw e;
-    }
-}
-
-export async function GetToken(
-    ID: string,
-    secret: string
-): Promise<Result<SpotifyToken>> {
-    return await tryCatch<SpotifyToken>(extractResponse<SpotifyToken>(fetch(
-        'https://accounts.spotify.com/api/token', {
-        method: 'POST',
-        headers: {
-            "Content-type": "application/x-www-form-urlencoded"
-        },
-        body: new URLSearchParams({
-            grant_type: 'client_credentials',
-            client_id: ID,
-            client_secret: secret
-        })
-    })));
-}
+import { Album, Artist, Category, ISO3166_1_Alpha_2, Locale, Markets, Paged, Playlist, ResourceType, SearchResult, Track } from "../types/spotify_api";
+import { fitRangeInt } from "../utils/helpers";
+import { RLCRetryFetch } from "./client";
 
 export async function GetAlbums(
     ids: Array<string>,
@@ -44,7 +9,7 @@ export async function GetAlbums(
     const url = 'https://api.spotify.com/v1/albums?'
         .concat(`ids=${ids.join(',')}`)
         .concat(market ? `&market=${market}` : '');
-    return await defaultFetch<{ albums: Array<Album> }>(url);
+    return await RLCRetryFetch<{ albums: Array<Album> }>(url);
 }
 
 export async function GetArtists(
@@ -53,7 +18,7 @@ export async function GetArtists(
     const url = 'https://api.spotify.com/v1/artists?'
         .concat(`ids=${ids.join(',')}`);
 
-    return await defaultFetch<{ artists: Array<Artist> }>(url);
+    return await RLCRetryFetch<{ artists: Array<Artist> }>(url);
 }
 
 export async function GetArtistAlbums(
@@ -69,11 +34,11 @@ export async function GetArtistAlbums(
         .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
 
-    return await defaultFetch<Paged<Album>>(url);
+    return await RLCRetryFetch<Paged<Album>>(url);
 }
 
 export async function Search(
-    p: string,
+    q: string,
     type: Array<ResourceType>,
     market?: ISO3166_1_Alpha_2,
     limit?: number,
@@ -81,14 +46,14 @@ export async function Search(
     include_external?: 'audio'
 ): Promise<SearchResult> {
     const url = 'https://api.spotify.com/v1/search?'
-        .concat(`q=${encodeURIComponent(p)}`)
+        .concat(`q=${encodeURIComponent(q)}`)
         .concat(`&type=${type}`)
         .concat(market ? `&market=${market}` : '')
         .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '')
         .concat(include_external ? `&include_external=${include_external}` : '');
 
-    return await defaultFetch<SearchResult>(url);
+    return await RLCRetryFetch<SearchResult>(url);
 }
 
 /**
@@ -108,7 +73,7 @@ export async function GetCategories(
         .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
 
-    return await defaultFetch<{ categories: Paged<Category> }>(url);
+    return await RLCRetryFetch<{ categories: Paged<Category> }>(url);
 }
 
 export async function GetTracks(
@@ -119,5 +84,15 @@ export async function GetTracks(
         .concat(`ids=${ids.join(',')}`)
         .concat(market ? `&market=${market}` : '');
 
-    return await defaultFetch<{ tracks: Array<Track> }>(url);
+    return await RLCRetryFetch<{ tracks: Array<Track> }>(url);
+}
+
+export async function GetPlaylist(
+    id: string,
+    market?: ISO3166_1_Alpha_2
+): Promise<Playlist> {
+    const url = `https://api.spotify.com/v1/playlists/${id}`
+        .concat(market ? `?market=${market}` : '');
+
+    return await RLCRetryFetch<Playlist>(url);
 }

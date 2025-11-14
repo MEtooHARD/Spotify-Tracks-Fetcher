@@ -1,0 +1,297 @@
+import chalk from "chalk";
+import { GetToken } from "./api_functions";
+import { setToken } from "./auth";
+import { Singleton } from "./wrappers";
+
+interface Credential {
+    clientID: string;
+    secret: string;
+}
+
+interface CredentialStatus {
+    bannedUntil: number;  // timestamp (ms)，0 表示未被 ban
+    requestCount: number;  // 使用次數統計
+}
+
+interface TokenInfo {
+    token: string;
+    expiresAt: number;  // timestamp (ms)
+    credentialIndex: number;
+    requestCount: number;  // 使用次數統計
+}
+
+/**
+ * Token Manager
+ * - 自動輪換 credentials
+ * - 定時更新 token（提前 5 分鐘更新）
+ * - 記錄使用統計
+ * - 追蹤每個 credential 的 ban 狀態
+ */
+export class TokenManager extends Singleton<TokenManager>() {
+    private credentials: Credential[] = [];
+    private credentialStatus: CredentialStatus[] = [];  // 每個 credential 的狀態
+    private currentIndex: number = 0;
+    private tokenInfo: TokenInfo | null = null;
+    private refreshTimer: NodeJS.Timeout | null = null;
+    private running: boolean = false;
+
+    /**
+     * 初始化 Token Manager
+     * @param credentials 多組 credentials
+     */
+    public async initialize(credentials: Credential[]): Promise<boolean> {
+        if (credentials.length === 0) {
+            console.error(chalk.red('[TokenManager]'), 'No credentials provided');
+            return false;
+        }
+
+        this.credentials = credentials;
+        this.credentialStatus = credentials.map(() => ({
+            bannedUntil: 0,
+            requestCount: 0
+        }));
+        this.currentIndex = 0;
+
+        console.log(chalk.blue('[TokenManager]'), `Loaded ${credentials.length} credential(s)`);
+
+        // 立即獲取第一個 token
+        const success = await this.refreshToken();
+        if (!success) {
+            console.error(chalk.red('[TokenManager]'), 'Failed to get initial token');
+            return false;
+        }
+
+        // 啟動自動更新
+        this.startAutoRefresh();
+        this.running = true;
+
+        return true;
+    }
+
+    /**
+     * 找到下一個可用的 credential（未被 ban 的）
+     */
+    private findNextAvailableCredential(): number | null {
+        const now = Date.now();
+        const startIndex = this.currentIndex;
+
+        // 從當前 index 開始找
+        for (let i = 0; i < this.credentials.length; i++) {
+            const index = (startIndex + i) % this.credentials.length;
+            const status = this.credentialStatus[index];
+
+            if (status && status.bannedUntil <= now) {
+                return index;
+            }
+        }
+
+        // 全部都被 ban 了，返回最快解 ban 的
+        let minBannedUntil = Infinity;
+        let minIndex = 0;
+
+        for (let i = 0; i < this.credentialStatus.length; i++) {
+            const status = this.credentialStatus[i];
+            if (status && status.bannedUntil < minBannedUntil) {
+                minBannedUntil = status.bannedUntil;
+                minIndex = i;
+            }
+        }
+
+        const waitSeconds = Math.ceil((minBannedUntil - now) / 1000);
+        console.warn(chalk.yellow('[TokenManager]'), `All credentials are banned. Shortest wait: ${waitSeconds}s (credential #${minIndex + 1})`);
+
+        return minIndex;
+    }
+
+    /**
+     * 刷新 token（使用當前 credential）
+     * 若 GetToken API 呼叫失敗，會自動切換到下一組 credential 重試
+     */
+    public async refreshToken(): Promise<boolean> {
+        // 找到可用的 credential
+        const availableIndex = this.findNextAvailableCredential();
+        if (availableIndex === null) {
+            console.error(chalk.red('[TokenManager]'), 'No available credential');
+            return false;
+        }
+
+        this.currentIndex = availableIndex;
+        const cred = this.credentials[this.currentIndex];
+        if (!cred) {
+            console.error(chalk.red('[TokenManager]'), 'No credential available');
+            return false;
+        }
+
+        console.log(chalk.cyan('[TokenManager]'), `Fetching token with credential #${this.currentIndex + 1}...`);
+
+        try {
+            const [tokenRes, err] = await GetToken(cred.clientID, cred.secret);
+
+            if (err || !tokenRes) {
+                throw new Error(err?.message || 'Failed to get token');
+            }
+
+            // 計算過期時間（提前 5 分鐘）
+            const expiresAt = Date.now() + (tokenRes.expires_in - 300) * 1000;
+
+            this.tokenInfo = {
+                token: tokenRes.access_token,
+                expiresAt,
+                credentialIndex: this.currentIndex,
+                requestCount: 0
+            };
+
+            // 更新全域 token
+            setToken(tokenRes.access_token);
+
+            const expiresInMin = Math.floor((expiresAt - Date.now()) / 60000);
+            console.log(chalk.green('[TokenManager]'), `Token updated, expires in ${expiresInMin} minutes`);
+
+            return true;
+        } catch (error) {
+            console.error(chalk.red('[TokenManager]'), `Failed to fetch token:`, error);
+
+            // 自動切換到下一組 credential
+            if (this.credentials.length > 1) {
+                this.currentIndex = (this.currentIndex + 1) % this.credentials.length;
+                console.log(chalk.yellow('[TokenManager]'), `Switching to credential #${this.currentIndex + 1}`);
+                return await this.refreshToken();  // 遞迴重試
+            }
+
+            return false;
+        }
+    }
+
+    /**
+     * 啟動自動更新（定時檢查）
+     */
+    private startAutoRefresh(): void {
+        if (this.refreshTimer) {
+            clearInterval(this.refreshTimer);
+        }
+
+        // 每分鐘檢查一次是否需要更新
+        this.refreshTimer = setInterval(() => {
+            if (!this.tokenInfo) return;
+
+            const timeLeft = this.tokenInfo.expiresAt - Date.now();
+            const minutesLeft = Math.floor(timeLeft / 60000);
+
+            // 剩餘時間 <= 65s，立即更新
+            if (timeLeft <= 65000) {
+                console.log(chalk.yellow('[TokenManager]'), 'Token expired, refreshing...');
+                this.refreshToken();
+            }
+            // 每 5 分鐘 log 一次狀態
+            else if (minutesLeft % 5 === 0) {
+                console.log(chalk.gray('[TokenManager]'), `Token valid for ${minutesLeft} more minutes (used ${this.tokenInfo.requestCount} times)`);
+            }
+        }, 60_000);  // 每分鐘檢查
+    }
+
+    /**
+     * 記錄 token 使用（在 API 呼叫時呼叫）
+     */
+    public recordUsage(): void {
+        if (this.tokenInfo) {
+            this.tokenInfo.requestCount++;
+            const status = this.credentialStatus[this.currentIndex];
+            if (status) {
+                status.requestCount++;
+            }
+        }
+    }
+
+    /**
+     * 記錄 credential 被 ban（收到 429 時呼叫）
+     * @param retryAfterSeconds retry-after header 的秒數
+     */
+    public recordRateLimit(retryAfterSeconds: number): void {
+        const bannedUntil = Date.now() + retryAfterSeconds * 1000;
+        const status = this.credentialStatus[this.currentIndex];
+        if (status) {
+            status.bannedUntil = bannedUntil;
+        }
+
+        const bannedUntilTime = new Date(bannedUntil).toLocaleString('zh-TW');
+        console.warn(chalk.red('[TokenManager]'),
+            `Credential #${this.currentIndex + 1} is rate limited until ${bannedUntilTime} (${retryAfterSeconds}s)`);
+    }
+
+    /**
+     * 取得目前 token 資訊
+     */
+    public getTokenInfo(): TokenInfo | null {
+        return this.tokenInfo;
+    }
+
+    /**
+     * 手動輪換到下一組 credential
+     */
+    public async switchCredential(): Promise<boolean> {
+        if (this.credentials.length <= 1) {
+            console.log(chalk.yellow('[TokenManager]'), 'Only one credential available, cannot switch');
+            return false;
+        }
+
+        // 找到下一個可用的 credential
+        const nextIndex = this.findNextAvailableCredential();
+        if (nextIndex === null) {
+            console.error(chalk.red('[TokenManager]'), 'No available credential to switch to');
+            return false;
+        }
+
+        // 如果找到的就是當前的，嘗試下一個
+        if (nextIndex === this.currentIndex) {
+            const tempIndex = (this.currentIndex + 1) % this.credentials.length;
+            const status = this.credentialStatus[tempIndex];
+
+            if (status && status.bannedUntil > Date.now()) {
+                const waitSeconds = Math.ceil((status.bannedUntil - Date.now()) / 1000);
+                console.warn(chalk.yellow('[TokenManager]'),
+                    `Next credential #${tempIndex + 1} is banned for ${waitSeconds} more seconds`);
+            }
+
+            this.currentIndex = tempIndex;
+        } else {
+            this.currentIndex = nextIndex;
+        }
+
+        console.log(chalk.cyan('[TokenManager]'), `Switching to credential #${this.currentIndex + 1}`);
+
+        return await this.refreshToken();
+    }
+
+    /**
+     * 停止自動更新
+     */
+    public stop(): void {
+        if (this.refreshTimer) {
+            clearInterval(this.refreshTimer);
+            this.refreshTimer = null;
+        }
+        this.running = false;
+        console.log(chalk.gray('[TokenManager]'), 'Stopped');
+    }
+
+    /**
+     * 取得統計資訊
+     */
+    public getStats(): {
+        currentCredential: number;
+        totalCredentials: number;
+        tokenExpiresIn: number;  // 秒
+        requestCount: number;
+        isRunning: boolean;
+    } | null {
+        if (!this.tokenInfo) return null;
+
+        return {
+            currentCredential: this.currentIndex + 1,
+            totalCredentials: this.credentials.length,
+            tokenExpiresIn: Math.max(0, Math.floor((this.tokenInfo.expiresAt - Date.now()) / 1000)),
+            requestCount: this.tokenInfo.requestCount,
+            isRunning: this.running
+        };
+    }
+}

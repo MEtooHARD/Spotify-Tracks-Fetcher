@@ -5,15 +5,18 @@ import { randomChalk } from "./helpers";
 export class TaskRunner {
     private activeTasks: number = 0;
     private running: boolean = false;
+    private spotify_api_rate_limited: boolean = false;
     private SID: number = 1;
 
     private SIDcap: number;
+    private lastTaskStartTime: number = 0;  // 記錄上次 task 開始的時間
 
     constructor(
         private readonly generators: Array<TaskGenerator>,
-        private readonly limit: number
+        private readonly limit: number,
+        private readonly minTaskIntervalMs: number = 0  // 兩個 task 之間的最小間隔（毫秒）
     ) {
-        this.SIDcap = Math.max(999999999999999999999, limit);
+        this.SIDcap = Math.max(9999999999999, limit);
     }
 
     public isRunning(): boolean { return this.running; }
@@ -31,15 +34,28 @@ export class TaskRunner {
         return this.SID++;
     }
 
-    private runTask() {
+    private async runTask() {
         while (this.running && this.activeTasks < this.limit) {
             let task: Task | undefined = undefined;
 
             for (let i = 0; i < this.generators.length && !task; i++)
-                task = this.generators[i]!.getTask();
+                task = await this.generators[i]!.getTask();
 
             if (task) {
+                // 計算需要等待的時間，確保與上次 task 開始時間至少間隔 minTaskIntervalMs
+                if (this.minTaskIntervalMs > 0 && this.lastTaskStartTime > 0) {
+                    const elapsed = Date.now() - this.lastTaskStartTime;
+                    const waitTime = this.minTaskIntervalMs - elapsed;
+                    
+                    if (waitTime > 0) {
+                        console.log(chalk.gray(`[task runner] waiting ${waitTime}ms to maintain interval...`));
+                        await new Promise(resolve => setTimeout(resolve, waitTime));
+                    }
+                }
+
                 this.activeTasks++;
+                this.lastTaskStartTime = Date.now();  // 記錄這次 task 開始的時間
+                
                 const SID = this.getSID();
                 const color = randomChalk();
                 const tag = color(`[task ${SID}]`);
@@ -65,10 +81,11 @@ export class TaskRunner {
 }
 
 export abstract class TaskGenerator extends Singleton<TaskGenerator>() {
-    public abstract getTask(): Task | undefined;
+    public abstract getTask(): Promise<Task | undefined>;
 }
 
 export interface Task {
     name: string;
+    involves_apotify_api?: boolean;
     task: (logger: (...msg: any[]) => void) => Promise<void>;
 }

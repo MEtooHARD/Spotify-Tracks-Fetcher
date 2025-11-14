@@ -1,0 +1,227 @@
+import { db } from "./kysely_instance";
+import { QueryType } from "./schema";
+
+export class SearchQueryWrapper {
+    private constructor() { }
+
+    private static instance: SearchQueryWrapper | null = null;
+
+    public static getInstance(): SearchQueryWrapper {
+        if (!SearchQueryWrapper.instance) {
+            SearchQueryWrapper.instance = new SearchQueryWrapper();
+        }
+        return SearchQueryWrapper.instance;
+    }
+
+    /**
+     * 新增單一搜尋關鍵字
+     */
+    public async add(query: string, type: QueryType): Promise<boolean> {
+        const result = await db
+            .insertInto('search_queries')
+            .values({
+                query,
+                type,
+                // last_searched_at 保持 NULL
+            })
+            .onConflict((oc) => oc
+                .column('query')
+                .doNothing()  // 已存在就不動
+            )
+            .executeTakeFirst();
+
+        return (result.numInsertedOrUpdatedRows ?? 0n) > 0n;
+    }
+
+    /**
+     * 批量新增搜尋關鍵字
+     */
+    public async addAll(queries: string[], type: QueryType): Promise<number> {
+        if (queries.length === 0) return 0;
+
+        const result = await db
+            .insertInto('search_queries')
+            .values(queries.map(query => ({
+                query,
+                type,
+            })))
+            .onConflict((oc) => oc
+                .column('query')
+                .doNothing()
+            )
+            .execute();
+
+        // 累加所有插入的行數
+        return result.reduce((sum, r) => sum + Number(r.numInsertedOrUpdatedRows ?? 0n), 0);
+    }
+
+    /**
+     * 從搜尋結果中提取並新增 genres（自動補充關鍵字）
+     * @param artists 藝人陣列
+     * @returns 新增的 genre 數量
+     */
+    public async addGenresFromArtists(artists: Array<{ genres?: string[] }>): Promise<number> {
+        const genres = new Set<string>();
+
+        for (const artist of artists)
+            if (artist.genres)
+                for (const genre of artist.genres)
+                    genres.add(genre);
+
+        if (genres.size === 0) return 0;
+
+        return await this.addAll(Array.from(genres), 'genre');
+    }
+
+    /**
+     * 檢查是否有任何待搜尋的關鍵字
+     */
+    public async hasAnyQueries(): Promise<boolean> {
+        const result = await db
+            .selectFrom('search_queries')
+            .select('query')
+            .limit(1)
+            .executeTakeFirst();
+
+        return result !== undefined;
+    }
+
+    /**
+     * 從資料庫中提取文字作為搜尋關鍵字（備用方案）
+     * 從已知的 artists, albums 等提取名稱
+     */
+    public async populateFromDatabase(): Promise<number> {
+        let added = 0;
+
+        // 從 artists 提取名稱（取前 20 個）
+        const artists = await db
+            .selectFrom('artists')
+            .select('name')
+            .limit(20)
+            .execute();
+
+        if (artists.length > 0) {
+            const artistNames = artists.map(a => a.name);
+            added += await this.addAll(artistNames, 'category');  // 用 category 標記
+        }
+
+        // 從 albums 提取名稱（取前 20 個）
+        const albums = await db
+            .selectFrom('albums')
+            .select('name')
+            .limit(20)
+            .execute();
+
+        if (albums.length > 0) {
+            const albumNames = albums.map(a => a.name);
+            added += await this.addAll(albumNames, 'category');
+        }
+
+        return added;
+    }
+
+    /**
+     * 取得一個需要搜尋的關鍵字（更新時間戳，不刪除）
+     * @param olderThanDays 超過 N 天沒搜過的才返回，NULL 視為需要搜尋
+     * @param type 可選：只取特定類型的關鍵字
+     */
+    public async take(olderThanDays: number = 30, type?: QueryType): Promise<string | undefined> {
+        return await db.transaction().execute(async (trx) => {
+            const threshold = new Date();
+            threshold.setDate(threshold.getDate() - olderThanDays);
+
+            // 建立查詢
+            let query = trx
+                .selectFrom('search_queries')
+                .select('query')
+                .where((eb) => eb.or([
+                    eb('last_searched_at', 'is', null),  // 從未搜過
+                    eb('last_searched_at', '<', threshold)  // 或太久沒搜
+                ]))
+                .orderBy('last_searched_at', 'asc')  // NULL 排最前面
+                .limit(1)
+                .forUpdate();
+
+            // 如果指定類型，加上過濾
+            if (type) {
+                query = query.where('type', '=', type);
+            }
+
+            const result = await query.executeTakeFirst();
+
+            if (!result) return undefined;
+
+            // 更新搜尋時間
+            await trx
+                .updateTable('search_queries')
+                .set({
+                    last_searched_at: new Date()
+                })
+                .where('query', '=', result.query)
+                .execute();
+
+            return result.query;
+        });
+    }
+
+    /**
+     * 取得統計資訊
+     */
+    public async getStats(): Promise<{
+        total: number;
+        neverSearched: number;
+        needsUpdate: number;
+        byType: Record<QueryType, number>;
+    }> {
+        // 總數
+        const total = await db
+            .selectFrom('search_queries')
+            .select(db.fn.count('query').as('count'))
+            .executeTakeFirst();
+
+        // 從未搜過的
+        const neverSearched = await db
+            .selectFrom('search_queries')
+            .select(db.fn.count('query').as('count'))
+            .where('last_searched_at', 'is', null)
+            .executeTakeFirst();
+
+        // 需要更新的（超過 N 天或從未搜過）
+        const threshold = new Date();
+        threshold.setDate(threshold.getDate() - 30);
+
+        const needsUpdate = await db
+            .selectFrom('search_queries')
+            .select(db.fn.count('query').as('count'))
+            .where((eb) => eb.or([
+                eb('last_searched_at', 'is', null),
+                eb('last_searched_at', '<', threshold)
+            ]))
+            .executeTakeFirst();
+
+        // 按類型統計
+        const byTypeResult = await db
+            .selectFrom('search_queries')
+            .select(['type', db.fn.count('query').as('count')])
+            .groupBy('type')
+            .execute();
+
+        const byType: Record<QueryType, number> = {
+            category: 0,
+            genre: 0
+        };
+
+        for (const row of byTypeResult) {
+            byType[row.type] = Number(row.count);
+        }
+
+        return {
+            total: Number(total?.count ?? 0),
+            neverSearched: Number(neverSearched?.count ?? 0),
+            needsUpdate: Number(needsUpdate?.count ?? 0),
+            byType
+        };
+    }
+}
+
+export const SearchQueries = SearchQueryWrapper.getInstance();

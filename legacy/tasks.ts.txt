@@ -1,0 +1,414 @@
+// import chalk from "chalk";
+// import { RLCRetryFetch, GetAlbums, GetArtists, GetCategories, GetPlaylist, GetTracks, Search } from "../../api_functions";
+// import { IDExploreStackWrapper } from "../../id_stack_wrapper";
+// import { SpotifyRepository } from "../../repository";
+// import { SearchQueryWrapper } from "../../search_query_wrapper";
+// import { Artist, Category, Paged, Track } from "../../spotify_types";
+// import { Task, TaskSource } from "../task";
+// import { tryCatch } from "../../wrappers";
+
+// const IDExploreStack = IDExploreStackWrapper.getInstance();
+// const SearchQueries = SearchQueryWrapper.getInstance();
+
+// function filter_null(item: any): boolean { return item !== null };
+
+// function isPaged<T>(obj: any): obj is Paged<T> {
+//     return obj &&
+//         typeof obj.href === 'string' &&
+//         Array.isArray(obj.items) &&
+//         typeof obj.total === 'number';
+// }
+
+// function extractPaged<T>(res: any): Paged<T> | undefined {
+//     if (isPaged<T>(res)) return res;
+//     for (const key of ['albums', 'artists', 'tracks', 'playlists'])
+//         if (res[key] && isPaged<T>(res[key])) return res[key];
+//     return undefined;
+// }
+// // #region HandlePaged
+// export async function HandlePaged<T>(
+//     paged: Paged<T>,
+//     handle_page_items: (items: Array<T>) => Promise<void>,
+//     filter?: (item: T) => boolean,  // 可選的過濾函數
+//     onProgress?: (current: number, total: number) => void  // 可選的進度回調
+// ) {
+//     let cur_paged: Paged<T> | undefined = paged;
+//     let processedCount = 0;
+
+//     while (cur_paged) {
+//         // 先過濾掉 null，然後再套用 filter（如果有）
+//         const nonNullItems = cur_paged.items.filter((item): item is T => item !== null);
+//         const items = filter ? nonNullItems.filter(filter) : nonNullItems;
+
+//         await handle_page_items(items);
+
+//         processedCount += items.length;
+
+//         // 回調進度
+//         if (onProgress) onProgress(processedCount, cur_paged.total);
+
+//         if (!cur_paged.next) break;
+//         const res: any = await RLCRetryFetch<any>(cur_paged.next);
+//         cur_paged = extractPaged<T>(res);
+//     }
+// }
+// // #endregion
+
+// // #region AlbumTask
+// export class AlbumTaskSource extends TaskSource {
+//     async getTask(): Promise<Task | undefined> {
+//         const album_id = (await IDExploreStack.get('album', 1))[0];
+//         if (!album_id) return undefined;
+
+//         return {
+//             name: `Process ${chalk.hex('#FFA500')('Album')}: ${album_id}`,
+//             run: async (log) => {
+//                 log('fetching album...');
+//                 const [res, err] = await tryCatch(GetAlbums([album_id]));
+
+//                 if (err) {
+//                     log(`${chalk.red('failed')} fetching album`);
+//                     throw err;  // 拋出錯誤讓 TaskRunner 捕捉
+//                 }
+
+//                 const album = res.albums[0];
+//                 if (!album) {
+//                     log(chalk.yellow('album not found'));
+//                     await IDExploreStack.rm([album_id]);
+//                     return;
+//                 }
+
+//                 // 提取 artist IDs
+//                 const artist_ids: string[] = album.artists.map(a => a.id);
+//                 const track_ids: string[] = [];
+
+//                 // 使用 HandlePaged 處理 album.tracks 的所有分頁
+//                 log(`fetching tracks from "${album.name}"...`);
+//                 await HandlePaged(
+//                     album.tracks,
+//                     async (items) => { track_ids.push(...items.map(t => t.id)) },
+//                     undefined,
+//                     (current, total) => log(chalk.gray(`  tracks: ${current}/${total}`))
+//                 );
+
+//                 // 批次加入 ID queue
+//                 const artist_ids_added = await IDExploreStack.addMany(artist_ids, 'artist');
+//                 log(chalk.blue('queued'), artist_ids_added, chalk.magenta('Artist IDs'));
+//                 const track_ids_added = await IDExploreStack.addMany(track_ids, 'track');
+//                 log(chalk.blue('queued'), track_ids_added, chalk.cyan('Track IDs'));
+//                 // 存入 album 到 DB
+//                 const albums_added = await SpotifyRepository.insertAlbums([album]);
+//                 log(chalk.green('stored'), albums_added, chalk.hex('#FFA500')('Album'));
+//                 // 刪除這個 album ID
+//                 const removed = await IDExploreStack.rm([album_id]);
+//                 log(chalk.gray('removed'), removed, chalk.hex('#FFA500')('Album ID'), 'from queue');
+//             }
+//         };
+//     }
+// }
+// // #endregion
+
+// // #region TrackTask
+// export class TrackTaskSource extends TaskSource {
+//     async getTask(): Promise<Task | undefined> {
+//         const track_ids = await IDExploreStack.get('track', 20);
+//         if (track_ids.length === 0) return undefined;
+
+//         return {
+//             name: `Process (${track_ids.length}) ${chalk.cyan('Track IDs')}`,
+//             run: async (log) => {
+//                 log('fetching tracks...');
+//                 const [res, err] = await tryCatch(GetTracks(track_ids));
+//                 if (err) {
+//                     log(`${chalk.red('failed')} fetching tracks`);
+//                     throw err;
+//                 }
+
+//                 const valid_tracks = res.tracks.filter(t => t !== null && t !== undefined);
+
+//                 // 存入 tracks 到 DB
+//                 const track_added = await SpotifyRepository.insertTracks(valid_tracks);
+//                 log(chalk.green('stored'), track_added, chalk.cyan('Tracks'));
+
+//                 // 存入 album IDs 和 artist IDs 到 queue
+//                 const album_ids = valid_tracks.map(t => t.album.id);
+//                 const artist_ids: string[] = valid_tracks.flatMap(t => t.artists.map(a => a.id));
+
+//                 const album_ids_added = await IDExploreStack.addMany(album_ids, 'album');
+//                 log(chalk.blue('queued'), album_ids_added, chalk.hex('#FFA500')('Album IDs'));
+//                 const artist_ids_added = await IDExploreStack.addMany(artist_ids, 'artist');
+//                 log(chalk.blue('queued'), artist_ids_added, chalk.magenta('Artist IDs'));
+//                 // 刪除這批 track IDs
+//                 const removed = await IDExploreStack.rm(track_ids);
+//                 log(chalk.gray('removed'), removed, chalk.cyan('Track IDs'), 'from queue');
+//             }
+//         }
+//     }
+// }
+// // #endregion
+
+// // #region ArtistTask
+// export class ArtistTaskSource extends TaskSource {
+//     async getTask(): Promise<Task | undefined> {
+//         const artist_ids = await IDExploreStack.get('artist', 20);
+//         if (artist_ids.length === 0) return undefined;
+
+//         return {
+//             name: `Process (${artist_ids.length}) ${chalk.magenta('Artist IDs')}`,
+//             run: async (log) => {
+//                 log('fetching artists...');
+//                 const [res, err] = await tryCatch(GetArtists(artist_ids));
+//                 if (err) {
+//                     log(`${chalk.red('failed')} fetching artists`);
+//                     throw err;
+//                 }
+
+//                 const valid_artists = res.artists.filter(a => a !== null && a !== undefined);
+
+//                 // 存入 artists 到 DB
+//                 const artists_added = await SpotifyRepository.insertArtists(valid_artists);
+//                 log(chalk.green('stored'), artists_added, chalk.magenta('Artists'));
+//                 // 提取 genres 作為新的搜尋關鍵字
+//                 const addedGenres = await SearchQueries.addGenresFromArtists(valid_artists);
+//                 log(chalk.green('discovered'), addedGenres, 'new', chalk.green('Genres'));
+//                 // 刪除這批 artist IDs
+//                 const removed = await IDExploreStack.rm(artist_ids);
+//                 log(chalk.gray('removed'), removed, chalk.magenta('Artist IDs'), 'from queue');
+//             }
+//         }
+//     }
+// }
+// // #endregion
+
+// // #region PlaylistTask
+// export class PlaylistTaskSource extends TaskSource {
+//     async getTask(): Promise<Task | undefined> {
+//         const playlist_id = (await IDExploreStack.get('playlist', 1))[0];
+//         if (!playlist_id) return undefined;
+
+//         return {
+//             name: `Process ${chalk.blue('Playlist')}: ${playlist_id}`,
+//             run: async (log) => {
+//                 log('fetching playlist...');
+//                 const [playlist, err] = await tryCatch(GetPlaylist(playlist_id));
+//                 if (err) {
+//                     log(`${chalk.red('failed')} fetching playlist`);
+//                     throw err;
+//                 }
+
+//                 const tracks: Track[] = [];
+//                 log(`fetching tracks from "${playlist.name}"...`);
+//                 await HandlePaged(
+//                     playlist.tracks,
+//                     async (items) => {
+//                         // 過濾掉 Episode 和無效 Track
+//                         items.forEach(item => {
+//                             // ⭐ 確保 track 存在、是 Track 類型、且有 ID
+//                             if (item.track &&
+//                                 item.track.type === 'track' &&
+//                                 item.track.id) {
+//                                 tracks.push(item.track as Track);
+//                             }
+//                         });
+//                     },
+//                     undefined,
+//                     (current, total) => log(chalk.gray(`  tracks in "${playlist.name}": ${current}/${total}`))
+//                 );
+
+//                 // 存入 tracks 到 DB
+//                 const tracks_added = await SpotifyRepository.insertTracks(tracks);
+//                 log(chalk.green('stored'), tracks_added, chalk.cyan('Tracks'));
+
+//                 // 提取 album IDs 和 artist IDs
+//                 const album_ids = tracks.map(t => t.album.id);
+//                 const artist_ids: string[] = tracks.flatMap(t => t.artists.map(a => a.id));
+
+//                 const album_ids_added = await IDExploreStack.addMany(album_ids, 'album');
+//                 log(chalk.blue('queued'), album_ids_added, chalk.hex('#FFA500')('Album IDs'));
+//                 const artist_ids_added = await IDExploreStack.addMany(artist_ids, 'artist');
+//                 log(chalk.blue('queued'), artist_ids_added, chalk.magenta('Artist IDs'));
+
+//                 // 存入 playlist 到 DB
+//                 await SpotifyRepository.insertPlaylist({
+//                     id: playlist.id,
+//                     name: playlist.name,
+//                     tracks: tracks.map(t => t.id)
+//                 });
+//                 log(chalk.green('stored'), chalk.blue('Playlist'));
+
+//                 // 刪除這個 playlist ID
+//                 const removed = await IDExploreStack.rm([playlist_id]);
+//                 log(chalk.gray('removed'), removed, chalk.blue('Playlist ID'), 'from queue');
+//             }
+//         };
+//     }
+// }
+// // #endregion
+
+// // ===== SearchTask Implementation =====
+
+// // #region SearchTask
+// /**
+//  * Search => Store Artists & Tracks, Store Album IDs and Playlist IDs
+//  * Extract and Store Genres from Artists
+//  */
+// export class SearchTaskSource extends TaskSource {
+//     async getTask(): Promise<Task | undefined> {
+//         // 1. 嘗試從資料庫取得關鍵字
+//         let query = await SearchQueries.take(30);
+
+//         // 2. 沒有關鍵字，嘗試補充
+//         if (!query) {
+//             const refilled = await this.refillQueries();
+//             if (refilled === 0) {
+//                 // 補充失敗，沒有任何可用資源
+//                 return undefined;
+//             }
+
+//             // 補充成功，再次嘗試取得
+//             query = await SearchQueries.take(30);
+//             if (!query) return undefined;
+//         }
+
+//         return {
+//             name: `Search:${chalk.cyan(query)}`,
+//             run: async (log) => {
+//                 const result = await Search(
+//                     query,
+//                     ['artist', 'album', 'playlist', 'track'],
+//                     undefined,
+//                     50
+//                 );
+//                 log('result arrived, start fetching.');
+
+//                 let totalFound = 0;
+
+//                 // 處理 Artists（完整物件 → 存入 DB）
+//                 if (result.artists) {
+//                     const artists: Artist[] = [];
+//                     await HandlePaged(
+//                         result.artists,
+//                         async (items) => {
+//                             artists.push(...items);
+//                             // await IDExploreStack.addMany(items.map(i => i.id), 'artist');
+//                             // totalFound += items.length;
+//                         },
+//                         undefined,
+//                         (current, total) => log(chalk.gray(`artists: ${current}/${total}`))
+//                     );
+
+//                     // 批次插入資料庫
+//                     await SpotifyRepository.insertArtists(artists);
+
+//                     log(chalk.blue('added'), artists.length, chalk.magenta('Artists'));
+//                     // 提取 genres 作為新的搜尋關鍵字
+//                     const addedGenres = await SearchQueries.addGenresFromArtists(artists);
+//                     if (addedGenres > 0) {
+//                         log(chalk.green('discovered'), addedGenres, 'new', chalk.green('Genres'));
+//                     }
+//                 }
+
+//                 // 處理 Tracks（完整物件 → 存入 DB）
+//                 if (result.tracks) {
+//                     const tracks: Track[] = [];
+//                     await HandlePaged(
+//                         result.tracks,
+//                         async (items) => {
+//                             tracks.push(...items);
+//                             // await IDExploreStack.addMany(items.map(i => i.id), 'track');
+//                             // totalFound += items.length;
+//                         },
+//                         undefined,
+//                         (current, total) => log(chalk.gray(`tracks: ${current}/${total}`))
+//                     );
+
+//                     // 批次插入資料庫
+//                     await SpotifyRepository.insertTracks(tracks);
+
+//                     log(chalk.blue('added'), tracks.length, chalk.cyan('Tracks'));
+//                 }
+
+//                 // 處理 Albums（SimplifiedAlbum → 只存 ID）
+//                 if (result.albums) {
+//                     let count = 0;
+//                     await HandlePaged(
+//                         result.albums,
+//                         async (albums) => {
+//                             await IDExploreStack.addMany(albums.map(i => i.id), 'album');
+//                             count += albums.length;
+//                             totalFound += albums.length;
+//                         },
+//                         undefined,
+//                         (current, total) => log(chalk.gray(`albums: ${current}/${total}`))
+//                     );
+//                     log(chalk.blue('added'), count, chalk.hex('#FFA500')('Album IDs'));
+//                 }
+
+//                 // 處理 Playlists（SimplifiedPlaylist → 只存 ID）
+//                 if (result.playlists) {
+//                     let count = 0;
+//                     await HandlePaged(
+//                         result.playlists,
+//                         async (playlists) => {
+//                             await IDExploreStack.addMany(playlists.map(i => i.id), 'playlist');
+//                             count += playlists.length;
+//                             totalFound += playlists.length;
+//                         },
+//                         undefined,
+//                         (current, total) => log(chalk.gray(`playlists: ${current}/${total}`))
+//                     );
+//                     log(chalk.blue('added'), count, chalk.blue('Playlist IDs'));
+//                 }
+
+//                 // log(chalk.green('done'), 'total found:', totalFound);
+//             }
+//         };
+//     }
+
+//     /**
+//      * 補充搜尋關鍵字
+//      * 優先順序：categories > 資料庫中的 artists/albums
+//      */
+//     private async refillQueries(): Promise<number> {
+//         console.log(chalk.yellow('[SearchTask]'), 'No queries found, attempting to refill...');
+
+//         // 方案 A: 從 Spotify categories 取得
+//         try {
+//             const categoriesResult = await GetCategories('zh_TW', 50);
+
+//             let added = 0;
+//             await HandlePaged(
+//                 categoriesResult.categories!,
+//                 async (categories: Category[]) => {
+//                     const queries = categories.map(c => c.name);
+//                     const count = await SearchQueries.addAll(queries, 'category');
+//                     added += count;
+//                 },
+//                 undefined,
+//                 (current, total) => console.log(chalk.gray(`[SearchTask] categories: ${current}/${total}`))
+//             );
+
+//             if (added > 0) {
+//                 console.log(chalk.green('[SearchTask]'), `Refilled ${added} queries from categories`);
+//                 return added;
+//             }
+//         } catch (err) {
+//             console.error(chalk.red('[SearchTask]'), 'Failed to fetch categories:', err);
+//         }
+
+//         // 方案 B: 從資料庫中已知的 artists/albums 提取
+//         try {
+//             const added = await SearchQueries.populateFromDatabase();
+//             if (added > 0) {
+//                 console.log(chalk.green('[SearchTask]'), `Refilled ${added} queries from database`);
+//                 return added;
+//             }
+//         } catch (err) {
+//             console.error(chalk.red('[SearchTask]'), 'Failed to populate from database:', err);
+//         }
+
+//         console.log(chalk.yellow('[SearchTask]'), 'Unable to refill queries from any source');
+//         return 0;
+//     }
+// }
+// // #endregion

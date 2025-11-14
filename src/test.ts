@@ -1,32 +1,38 @@
-import { ExploreStack } from "./helpers";
+import chalk from "chalk";
+import { GetToken, setToken } from "./api/auth";
+import { GetPlaylist } from "./api/endpoints";
+import { Config } from "./utils/config_loader";
+import { tryCatch } from "./utils/wrapper";
 
-const stack = new ExploreStack();
+(async () => {
+    const [token, err] = await GetToken(Config.spotify[0]!.clientID, Config.spotify[0]!.secret);
+    if (!token) return;
+    console.log('Token:', chalk.yellow(token.access_token));
+    setToken(token.access_token);
 
-for (let i = 0; i < 10; i++) {
-    stack.add(`item-${i}`);
-}
+    // const [search_res, search_err] = await tryCatch(Search('華語精選', ['playlist']));
+    // if (search_err) {
+    //     console.error('Search error:', search_err);
+    //     return;
+    // }
 
+    // console.log('Search result:', search_res);
 
-for (let i = 0; i < 5; i++) {
-    console.log(stack.pop())
-}
+    // const first_playlist = search_res.playlists!.items[0];
 
-console.log('---');
+    // console.log('pl:', first_playlist?.name);
+    // console.log('pl tracks:', first_playlist?.tracks.total);
+    // console.log(first_playlist);
 
-for (let i = 10; i < 15; i++) {
-    stack.add(`item-${i}`);
-}
+    // const [page_res, page_err] = await tryCatch(defaultFetch(first_playlist!.tracks!.next!));
+    // if (page_err) {
+    //     console.error('Page fetch error:', page_err);
+    //     return;
+    // }
+    // console.log('Next page result:', page_res);
 
-for (let i = 0; i < 15; i++) {
-    console.log(stack.pop())
-}
+    const [res, err1] = await tryCatch(GetPlaylist('2AKSKQ0Rnd3I9zH60q70oA'))
+    console.log(res);
+})();
 
-console.log('---');
-
-for (let i = 0; i < 10; i++) {
-    stack.add(`item-${i}`);
-}
-
-for (let i = 0; i < 5; i++) {
-    console.log(stack.pop())
-}
+//https://open.spotify.com/playlist/2AKSKQ0Rnd3I9zH60q70oA

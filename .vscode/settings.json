@@ -12,5 +12,8 @@
     "terminal.integrated.env.linux": {
         "LANG": "en_US.UTF-8",
         "LC_ALL": "en_US.UTF-8"
+    },
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
     }
 }
