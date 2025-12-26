@@ -1,11 +1,11 @@
 import chalk from "chalk";
-import { IDExploreStack } from "../../database/id_stack";
-import { Task, TaskSource } from "../task";
-import { tryCatch } from "../../utils/wrapper";
-import { GetPlaylist } from "../../api/endpoints";
-import { Track } from "../../types/spotify_api";
-import { HandlePaged } from "./utils";
-import { SpotifyRepository } from "../../database/repository";
+import { IDExploreStack } from "../../database/id_stack.js";
+import { Task, TaskSource } from "../task.js";
+import { try_catch } from "../../utils/wrapper.js";
+import { GetPlaylist } from "../../api/endpoints.js";
+import { Track } from "../../types/spotify_api.js";
+import { HandlePaged } from "./utils.js";
+import { SpotifyRepository } from "../../database/repository.js";
 
 export class PlaylistTaskSource extends TaskSource {
     async getTask(): Promise<Task | undefined> {
@@ -16,8 +16,13 @@ export class PlaylistTaskSource extends TaskSource {
             name: `Process ${chalk.blue('Playlist')}: ${playlist_id}`,
             run: async (log) => {
                 log('fetching playlist...');
-                const [playlist, err] = await tryCatch(GetPlaylist(playlist_id));
+                const [playlist, err] = await try_catch(GetPlaylist(playlist_id));
                 if (err) {
+                    if ((err as any)?.status === 404) {
+                        log(chalk.yellow('playlist not found (404), removing from queue'));
+                        await IDExploreStack.rm([playlist_id]);
+                        return; // 正常結束，不拋出錯誤
+                    }
                     log(`${chalk.red('failed')} fetching playlist`);
                     throw err;
                 }
@@ -29,10 +34,15 @@ export class PlaylistTaskSource extends TaskSource {
                     async (items) => {
                         // 過濾掉 Episode 和無效 Track
                         items.forEach(item => {
-                            // ⭐ 確保 track 存在、是 Track 類型、且有 ID
+                            // ⭐ 確保 track 存在、是 Track 類型、且有完整必要欄位
                             if (item.track &&
                                 item.track.type === 'track' &&
-                                item.track.id) {
+                                item.track.id &&
+                                item.track.album &&
+                                item.track.album.id &&
+                                item.track.artists &&
+                                Array.isArray(item.track.artists) &&
+                                item.track.artists.length > 0) {
                                 tracks.push(item.track as Track);
                             }
                         });
@@ -42,8 +52,8 @@ export class PlaylistTaskSource extends TaskSource {
                 );
 
                 // 存入 tracks 到 DB
-                const tracks_added = await SpotifyRepository.insertTracks(tracks);
-                log(chalk.green('stored'), tracks_added, chalk.cyan('Tracks'));
+                const track_added = await SpotifyRepository.insertTracks(tracks, log);
+                log(chalk.green('stored'), track_added, chalk.cyan('Tracks'));
 
                 // 提取 album IDs 和 artist IDs
                 const album_ids = tracks.map(t => t.album.id);
@@ -51,6 +61,7 @@ export class PlaylistTaskSource extends TaskSource {
 
                 const album_ids_added = await IDExploreStack.addMany(album_ids, 'album');
                 log(chalk.blue('queued'), album_ids_added, chalk.hex('#FFA500')('Album IDs'));
+
                 const artist_ids_added = await IDExploreStack.addMany(artist_ids, 'artist');
                 log(chalk.blue('queued'), artist_ids_added, chalk.magenta('Artist IDs'));
 

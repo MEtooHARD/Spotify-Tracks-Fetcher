@@ -1,10 +1,10 @@
 import chalk from "chalk";
-import { IDExploreStack } from "../../database/id_stack";
-import { Task, TaskSource } from "../task";
-import { tryCatch } from "../../utils/wrapper";
-import { GetAlbums } from "../../api/endpoints";
-import { HandlePaged } from "./utils";
-import { SpotifyRepository } from "../../database/repository";
+import { IDExploreStack } from "../../database/id_stack.js";
+import { Task, TaskSource } from "../task.js";
+import { try_catch } from "../../utils/wrapper.js";
+import { GetAlbums } from "../../api/endpoints.js";
+import { HandlePaged } from "./utils.js";
+import { SpotifyRepository } from "../../database/repository.js";
 
 export class AlbumTaskSource extends TaskSource {
     async getTask(): Promise<Task | undefined> {
@@ -15,7 +15,7 @@ export class AlbumTaskSource extends TaskSource {
             name: `Process ${chalk.hex('#FFA500')('Album')}: ${album_id}`,
             run: async (log) => {
                 log('fetching album...');
-                const [res, err] = await tryCatch(GetAlbums([album_id]));
+                const [res, err] = await try_catch(GetAlbums([album_id]));
 
                 if (err) {
                     log(`${chalk.red('failed')} fetching album`);
@@ -48,7 +48,7 @@ export class AlbumTaskSource extends TaskSource {
                 const track_ids_added = await IDExploreStack.addMany(track_ids, 'track');
                 log(chalk.blue('queued'), track_ids_added, chalk.cyan('Track IDs'));
                 // 存入 album 到 DB
-                const albums_added = await SpotifyRepository.insertAlbums([album]);
+                const albums_added = await SpotifyRepository.insertAlbums([album], log);
                 log(chalk.green('stored'), albums_added, chalk.hex('#FFA500')('Album'));
                 // 刪除這個 album ID
                 const removed = await IDExploreStack.rm([album_id]);

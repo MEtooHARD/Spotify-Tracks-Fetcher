@@ -1,6 +1,9 @@
-import { Album, Artist, Category, ISO3166_1_Alpha_2, Locale, Markets, Paged, Playlist, ResourceType, SearchResult, Track } from "../types/spotify_api";
-import { fitRangeInt } from "../utils/helpers";
-import { RLCRetryFetch } from "./client";
+import { Album, Artist, Category, ISO3166_1_Alpha_2, Locale, Markets, Paged, Playlist, ResourceType, SearchResult, Track } from "../types/spotify_api.js";
+import { fitRangeInt } from "../utils/helpers.js";
+import { CredentialManager } from "./credential_manager.js";
+
+
+const cred_mgr = CredentialManager.getInstance();
 
 export async function GetAlbums(
     ids: Array<string>,
@@ -9,7 +12,7 @@ export async function GetAlbums(
     const url = 'https://api.spotify.com/v1/albums?'
         .concat(`ids=${ids.join(',')}`)
         .concat(market ? `&market=${market}` : '');
-    return await RLCRetryFetch<{ albums: Array<Album> }>(url);
+    return await cred_mgr.api_get<{ albums: Array<Album> }>(url);
 }
 
 export async function GetArtists(
@@ -18,7 +21,7 @@ export async function GetArtists(
     const url = 'https://api.spotify.com/v1/artists?'
         .concat(`ids=${ids.join(',')}`);
 
-    return await RLCRetryFetch<{ artists: Array<Artist> }>(url);
+    return await cred_mgr.api_get<{ artists: Array<Artist> }>(url);
 }
 
 export async function GetArtistAlbums(
@@ -34,7 +37,7 @@ export async function GetArtistAlbums(
         .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
 
-    return await RLCRetryFetch<Paged<Album>>(url);
+    return await cred_mgr.api_get<Paged<Album>>(url);
 }
 
 export async function Search(
@@ -53,7 +56,7 @@ export async function Search(
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '')
         .concat(include_external ? `&include_external=${include_external}` : '');
 
-    return await RLCRetryFetch<SearchResult>(url);
+    return await cred_mgr.api_get<SearchResult>(url);
 }
 
 /**
@@ -73,7 +76,7 @@ export async function GetCategories(
         .concat(limit ? `&limit=${fitRangeInt(limit, 1, 50)}` : '')
         .concat(offset ? `&offset=${fitRangeInt(offset)}` : '');
 
-    return await RLCRetryFetch<{ categories: Paged<Category> }>(url);
+    return await cred_mgr.api_get<{ categories: Paged<Category> }>(url);
 }
 
 export async function GetTracks(
@@ -84,7 +87,7 @@ export async function GetTracks(
         .concat(`ids=${ids.join(',')}`)
         .concat(market ? `&market=${market}` : '');
 
-    return await RLCRetryFetch<{ tracks: Array<Track> }>(url);
+    return await cred_mgr.api_get<{ tracks: Array<Track> }>(url);
 }
 
 export async function GetPlaylist(
@@ -94,5 +97,5 @@ export async function GetPlaylist(
     const url = `https://api.spotify.com/v1/playlists/${id}`
         .concat(market ? `?market=${market}` : '');
 
-    return await RLCRetryFetch<Playlist>(url);
+    return await cred_mgr.api_get<Playlist>(url);
 }

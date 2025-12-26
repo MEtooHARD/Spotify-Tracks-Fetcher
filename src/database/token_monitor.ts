@@ -1,18 +1,15 @@
 import chalk from "chalk";
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { db } from './kysely_instance';
+import { db } from './kysely_instance.js';
 
 interface TokenStatus {
-    lastUpdate: string;
-    allBanned: boolean;
-    currentCredential: number;
+    last_updated: number; // UTC+0 timestamp
+    index: number;
     credentials: Array<{
-        index: number;
-        clientId: string;
-        isBanned: boolean;
-        bannedUntil: string | null;
-        requestCount: number;
+        client_id: string;
+        request_count: number;
+        status: boolean | number; // true: ok, false: unusable, number: ban recovery timestamp
     }>;
 }
 
@@ -49,20 +46,19 @@ async function getRecentEvents(limit: number = 5): Promise<TokenEvent[]> {
     }
 }
 
-function formatTimeRemaining(bannedUntil: string): string {
-    const now = new Date();
-    const target = new Date(bannedUntil);
-    const diff = target.getTime() - now.getTime();
+function formatTimeRemaining(bannedUntil: number): string {
+    const now = Date.now();
+    const diff = bannedUntil - now;
 
     if (diff <= 0) return '0s';
 
-    const minutes = Math.floor(diff / 60000);
-    const seconds = Math.floor((diff % 60000) / 1000);
+    const hours = Math.floor(diff / 3600000);
+    const minutes = Math.floor((diff % 3600000) / 60000);
 
-    if (minutes > 0) {
-        return `${minutes}m ${seconds}s`;
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
     }
-    return `${seconds}s`;
+    return `${minutes}m`;
 }
 
 function formatEventTime(timestamp: Date): string {
@@ -97,42 +93,54 @@ async function displayStatus() {
     // Credentials Status
     console.log(chalk.magenta.bold('🔐 Credentials Status:'));
 
-    const availableCount = status.credentials.filter(c => !c.isBanned).length;
+    const availableCount = status.credentials.filter(c => c.status === true).length;
     const totalCount = status.credentials.length;
+    const availableIds = status.credentials
+        .map((c, i) => ({ index: i, status: c.status }))
+        .filter(item => item.status === true)
+        .map(item => `#${item.index}`)
+        .join('  ');
 
-    for (const cred of status.credentials) {
-        // 顯示完整 clientId 或使用截斷格式
-        const displayId = typeof cred.clientId === 'string' && cred.clientId.length > 8
-            ? cred.clientId.substring(0, 8) + '...'
-            : cred.clientId || '?';
-        const prefix = `  #${cred.index + 1} (${displayId})`;
+    console.log(chalk.white('  Total          : '), chalk.cyan(totalCount));
+    console.log(chalk.white('  Available      : '), chalk.cyan(availableCount));
+    console.log(chalk.white('  Available IDs  : '), chalk.green(availableIds || chalk.gray('(none)')));
+    console.log(chalk.white('  Current        : '), chalk.cyan(`#${status.index}`) + chalk.gray(` (Used: ${status.credentials[status.index]?.request_count || 0})`));
+    console.log();
 
-        if (cred.isBanned && cred.bannedUntil) {
-            const timeLeft = formatTimeRemaining(cred.bannedUntil);
-            const bannedDate = new Date(cred.bannedUntil);
-            const taipeiRecoveryTime = new Date(bannedDate.getTime() + 8 * 60 * 60 * 1000);
-            const recoveryTimeStr = taipeiRecoveryTime.toISOString().replace('T', ' ').substring(5, 16); // MM-DD HH:MM
+    // Recovery Queue
+    console.log(chalk.yellow.bold('⏰ Recovery Queue (Next 5):'));
+
+    const bannedCreds = status.credentials
+        .map((c, i) => ({ index: i, cred: c, recoveryTime: typeof c.status === 'number' ? c.status : null }))
+        .filter(item => item.recoveryTime !== null)
+        .sort((a, b) => a.recoveryTime! - b.recoveryTime!)
+        .slice(0, 5);
+
+    if (bannedCreds.length === 0) {
+        console.log(chalk.gray('  No banned credentials'));
+    } else {
+        for (const item of bannedCreds) {
+            const displayId = item.cred.client_id.length > 8
+                ? item.cred.client_id.substring(0, 8) + '...'
+                : item.cred.client_id;
+            const timeLeft = formatTimeRemaining(item.recoveryTime!);
+            const recoveryDate = new Date(item.recoveryTime! + 8 * 60 * 60 * 1000); // UTC+8
+            const recoveryTimeStr = recoveryDate.toISOString().replace('T', ' ').substring(5, 16); // MM-DD HH:MM
 
             console.log(
-                chalk.white(prefix.padEnd(20)) +
-                chalk.red(` 🚫 BANNED `.padEnd(17)) +
-                chalk.gray(`Used: ${cred.requestCount}`.padEnd(12)) +
-                chalk.yellow(`→ ${recoveryTimeStr}`)
-            );
-        } else {
-            console.log(
-                chalk.white(prefix.padEnd(20)) +
-                chalk.green(` ✅ Available`.padEnd(17)) +
-                chalk.gray(`Used: ${cred.requestCount}`)
+                chalk.white(`  #${item.index}`.padEnd(6)) +
+                chalk.gray(`(${displayId})`.padEnd(16)) +
+                chalk.yellow(`→ ${recoveryTimeStr}`.padEnd(15)) +
+                chalk.cyan(`(${timeLeft})`.padEnd(12)) +
+                chalk.gray(`Used: ${item.cred.request_count}`)
             );
         }
     }
 
-    console.log(chalk.white('  ─────────────────────────────────────────────────────────────'));
-    console.log(chalk.white('  Current Credential : '), chalk.cyan(`#${status.currentCredential + 1}`));
-    console.log(chalk.white('  All Banned         : '), status.allBanned ? chalk.red('Yes') : chalk.green('No'));
-    console.log(chalk.white('  Available          : '), chalk.cyan(`${availableCount} / ${totalCount}`));
-    console.log(chalk.white('  Last Update        : '), chalk.gray(status.lastUpdate));
+    const lastUpdateDate = new Date(status.last_updated + 8 * 60 * 60 * 1000); // UTC+8
+    const lastUpdateStr = lastUpdateDate.toISOString().replace('T', ' ').substring(0, 19);
+    console.log();
+    console.log(chalk.gray('  Last Update: ' + lastUpdateStr));
     console.log();
 
     // Recent Events
@@ -179,7 +187,7 @@ async function displayStatus() {
     }
 
     console.log();
-    console.log(chalk.gray('Press Ctrl+C to exit. Updates every 10 seconds.'));
+    console.log(chalk.gray('Press Ctrl+C to exit. Refreshes every 30 seconds.'));
 }
 
 async function main() {
@@ -189,10 +197,10 @@ async function main() {
     // 顯示初始狀態
     await displayStatus();
 
-    // 每 10 秒更新一次
+    // 每 30 秒更新一次
     setInterval(async () => {
         await displayStatus();
-    }, 10_000);
+    }, 30_000);
 }
 
 main().catch(err => {

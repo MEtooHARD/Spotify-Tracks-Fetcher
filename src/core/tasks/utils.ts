@@ -1,5 +1,8 @@
-import { RLCRetryFetch } from "../../api/client";
-import { Paged } from "../../types/spotify_api";
+// import { RLCRetryFetch } from "../../api/client";
+import { CredentialManager } from "../../api/credential_manager.js";
+import { Paged } from "../../types/spotify_api.js";
+
+const cred_mgr = CredentialManager.getInstance();
 
 function isPaged<T>(obj: any): obj is Paged<T> {
     return obj &&
@@ -37,7 +40,7 @@ export async function HandlePaged<T>(
         if (onProgress) onProgress(processedCount, cur_paged.total);
 
         if (!cur_paged.next) break;
-        const res: any = await RLCRetryFetch<any>(cur_paged.next);
+        const res: any = await cred_mgr.api_get<any>(cur_paged.next);
         cur_paged = extractPaged<T>(res);
     }
 }

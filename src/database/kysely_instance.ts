@@ -1,7 +1,7 @@
 import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
-import { Config } from "../utils/config_loader";
-import { DB } from "./schema";
+import { Config } from "../utils/config_loader.js";
+import { DB } from "./schema.js";
 
 export const db = new Kysely<DB>({
     dialect: new PostgresDialect({

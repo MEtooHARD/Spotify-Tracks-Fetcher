@@ -1,11 +1,11 @@
 import chalk from "chalk";
-import { SearchQueries } from "../../database/search_query";
-import { Task, TaskSource } from "../task";
-import { GetCategories, Search } from "../../api/endpoints";
-import { Artist, Category, Track } from "../../types/spotify_api";
-import { HandlePaged } from "./utils";
-import { SpotifyRepository } from "../../database/repository";
-import { IDExploreStack } from "../../database/id_stack";
+import { SearchQueries } from "../../database/search_query.js";
+import { Task, TaskSource } from "../task.js";
+import { GetCategories, Search } from "../../api/endpoints.js";
+import { Artist, Category, Track } from "../../types/spotify_api.js";
+import { HandlePaged } from "./utils.js";
+import { SpotifyRepository } from "../../database/repository.js";
+import { IDExploreStack } from "../../database/id_stack.js";
 
 export class SearchTaskSource extends TaskSource {
     async getTask(): Promise<Task | undefined> {
@@ -53,9 +53,9 @@ export class SearchTaskSource extends TaskSource {
                     );
 
                     // 批次插入資料庫
-                    await SpotifyRepository.insertArtists(artists);
+                    const success_count = await SpotifyRepository.insertArtists(artists, log);
 
-                    log(chalk.blue('added'), artists.length, chalk.magenta('Artists'));
+                    log(chalk.blue('added'), success_count, chalk.magenta('Artists'));
                     // 提取 genres 作為新的搜尋關鍵字
                     const addedGenres = await SearchQueries.addGenresFromArtists(artists);
                     if (addedGenres > 0) {
@@ -78,9 +78,9 @@ export class SearchTaskSource extends TaskSource {
                     );
 
                     // 批次插入資料庫
-                    await SpotifyRepository.insertTracks(tracks);
+                    const success_count = await SpotifyRepository.insertTracks(tracks, log);
 
-                    log(chalk.blue('added'), tracks.length, chalk.cyan('Tracks'));
+                    log(chalk.blue('added'), success_count, chalk.cyan('Tracks'));
                 }
 
                 // 處理 Albums（SimplifiedAlbum → 只存 ID）
@@ -89,8 +89,7 @@ export class SearchTaskSource extends TaskSource {
                     await HandlePaged(
                         result.albums,
                         async (albums) => {
-                            await IDExploreStack.addMany(albums.map(i => i.id), 'album');
-                            count += albums.length;
+                            count += await IDExploreStack.addMany(albums.map(i => i.id), 'album');
                             totalFound += albums.length;
                         },
                         undefined,
@@ -105,8 +104,7 @@ export class SearchTaskSource extends TaskSource {
                     await HandlePaged(
                         result.playlists,
                         async (playlists) => {
-                            await IDExploreStack.addMany(playlists.map(i => i.id), 'playlist');
-                            count += playlists.length;
+                            count += await IDExploreStack.addMany(playlists.map(i => i.id), 'playlist');
                             totalFound += playlists.length;
                         },
                         undefined,
@@ -115,6 +113,8 @@ export class SearchTaskSource extends TaskSource {
                     log(chalk.blue('added'), count, chalk.blue('Playlist IDs'));
                 }
 
+                // Search 成功完成，標記為已搜尋
+                await SearchQueries.markAsSearched(query);
                 // log(chalk.green('done'), 'total found:', totalFound);
             }
         };

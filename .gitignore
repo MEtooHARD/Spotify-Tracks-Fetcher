@@ -1,5 +1,8 @@
 /src/config.json
 
+# automation related
+*.ps1
+*.sql
 
 # Logs
 logs

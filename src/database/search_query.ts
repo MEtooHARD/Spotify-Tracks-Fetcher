@@ -1,5 +1,5 @@
-import { db } from "./kysely_instance";
-import { QueryType } from "./schema";
+import { db } from "./kysely_instance.js";
+import { QueryType } from "./schema.js";
 
 export class SearchQueryWrapper {
     private constructor() { }
@@ -121,7 +121,7 @@ export class SearchQueryWrapper {
     }
 
     /**
-     * 取得一個需要搜尋的關鍵字（更新時間戳，不刪除）
+     * 取得一個需要搜尋的關鍵字（只選擇，不更新）
      * @param olderThanDays 超過 N 天沒搜過的才返回，NULL 視為需要搜尋
      * @param type 可選：只取特定類型的關鍵字
      */
@@ -151,17 +151,22 @@ export class SearchQueryWrapper {
 
             if (!result) return undefined;
 
-            // 更新搜尋時間
-            await trx
-                .updateTable('search_queries')
-                .set({
-                    last_searched_at: new Date()
-                })
-                .where('query', '=', result.query)
-                .execute();
-
+            // 不更新 last_searched_at，由 markAsSearched() 在成功後更新
             return result.query;
         });
+    }
+
+    /**
+     * 標記某個 query 已被搜尋（在 search 成功後調用）
+     */
+    public async markAsSearched(query: string): Promise<void> {
+        await db
+            .updateTable('search_queries')
+            .set({
+                last_searched_at: new Date()
+            })
+            .where('query', '=', query)
+            .execute();
     }
 
     /**

@@ -11,6 +11,18 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export type Json = JsonValue;
+
+export type JsonArray = JsonValue[];
+
+export type JsonObject = {
+  [x: string]: JsonValue | undefined;
+};
+
+export type JsonPrimitive = boolean | number | string | null;
+
+export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
+
 export type QueryType = "category" | "genre";
 
 export type SpotifyEntityType = "album" | "artist" | "category" | "genre" | "playlist" | "track";
@@ -40,6 +52,11 @@ export interface Categories {
   category: string;
 }
 
+export interface ErrIds {
+  id: string;
+  type: SpotifyEntityType;
+}
+
 export interface Genres {
   genre: string;
 }
@@ -47,6 +64,11 @@ export interface Genres {
 export interface Ids {
   id: string;
   type: SpotifyEntityType;
+}
+
+export interface PagedAlbums {
+  id: string;
+  paged: Json;
 }
 
 export interface Playlists {
@@ -67,6 +89,7 @@ export interface TokenEvents {
   event_type: string;
   id: Generated<number>;
   timestamp: Timestamp;
+  used: number | null;
 }
 
 export interface Tracks {
@@ -85,8 +108,10 @@ export interface DB {
   albums: Albums;
   artists: Artists;
   categories: Categories;
+  err_ids: ErrIds;
   genres: Genres;
   ids: Ids;
+  paged_albums: PagedAlbums;
   playlists: Playlists;
   search_queries: SearchQueries;
   token_events: TokenEvents;

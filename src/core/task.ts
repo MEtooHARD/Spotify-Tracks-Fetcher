@@ -1,8 +1,8 @@
 import chalk from "chalk";
-import { TokenManager } from "../api/token_manager";
-import { randomChalk } from "../utils/helpers";
-import { LogCapture } from "../utils/log_capture";
-import { Singleton } from "../utils/wrapper";
+import { randomChalk } from "../utils/helpers.js";
+import { LogCapture } from "../utils/log_capture.js";
+import { Singleton } from "../utils/wrapper.js";
+import { CredentialManager, CredentialExhaustedError, TokenRefreshFailure } from "../api/credential_manager.js";
 
 export interface Task {
     name: string;
@@ -56,7 +56,6 @@ export class TaskRunner {
     public resume(): void {
         if (this.paused) {
             this.paused = false;
-            console.log(chalk.green('[runner] resumed after token recovery'));
             this.consecutiveFailures = 0;  // 重置失敗計數
             this.loop();  // 重啟 task 循環
         }
@@ -120,6 +119,7 @@ export class TaskRunner {
         const color = randomChalk();
         const tag = color(`[task ${id}]`);
         const log: Logger = (...msg) => console.log(tag, ...msg);
+        const startTime = Date.now();  // 記錄 task 開始時間
 
         // 創建並啟動 log capture
         const logCapture = new LogCapture();
@@ -133,40 +133,25 @@ export class TaskRunner {
                 this.consecutiveFailures = 0;  // 成功則重置失敗計數
             })
             .catch(async (e) => {
-                // 分類錯誤類型
-                let errorType = 'UNKNOWN';
-                let shouldCountAsFailure = true;
+                // 簡單邏輯: 分類錯誤並決定是否暫停或計入失敗
 
-                if (e?.response?.status === 429) {
-                    errorType = 'RATE_LIMIT';
-                    shouldCountAsFailure = false;  // 429 不算失敗，系統會自動處理
-                } else if (e?.response?.status === 401 || e?.response?.status === 403) {
-                    errorType = 'AUTH_FAILED';
-                } else if (e?.code === 'ECONNREFUSED' || e?.code === 'ETIMEDOUT') {
-                    errorType = 'NETWORK_ERROR';
+                if (e instanceof CredentialExhaustedError) {
+                    // 所有 credential 被 ban/exhausted
+                    console.warn(tag, chalk.yellow(`Credential exhausted: ${e.message}`));
+                    this.pause();
+                } else if (e instanceof TokenRefreshFailure) {
+                    // Token 刷新失敗
+                    console.warn(tag, chalk.yellow(`Token refresh failed: ${e.message}`));
+                    this.pause();
+                } else if (e?.status >= 400 && e?.status < 500) {
+                    // 4xx 錯誤 (可能網路問題或其他限制)
+                    console.warn(tag, chalk.yellow(`4xx error [${e.status}]: ${e?.message || String(e)}`));
+                    this.pause();
                 } else {
-                    // 檢查是否所有 credentials 都被 ban
-                    const tokenMgr = TokenManager.getInstance();
-                    if (tokenMgr.isAllBanned()) {
-                        errorType = 'TOKEN_EXHAUSTED';
-                        shouldCountAsFailure = false;  // 不計為失敗，等待恢復
-
-                        // 立即暫停 task runner
-                        if (!this.paused) {
-                            this.pause();
-                        }
-                    } else if (e?.message) {
-                        errorType = 'APPLICATION_ERROR';
-                    }
-                }
-
-                console.error(tag, chalk.red(`error [${errorType}]:`), e?.message || String(e));
-
-                if (shouldCountAsFailure) {
+                    // 5xx、database 錯誤或其他應用程式錯誤
+                    console.error(tag, chalk.red(`error [${e?.status || 'ERROR'}]: ${e?.message || String(e)}`));
                     this.consecutiveFailures++;
                     console.log(chalk.yellow(`[runner] consecutive failures: ${this.consecutiveFailures}/${this.maxConsecutiveFailures}`));
-                } else {
-                    console.log(chalk.gray(`[runner] ${errorType} - not counted as failure`));
                 }
 
                 // 儲存失敗的 log
@@ -175,7 +160,21 @@ export class TaskRunner {
                     // 轉換為 UTC+8 時區
                     const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
                     const timestamp = taipeiTime.toISOString().replace(/[:.]/g, '-').replace('Z', '');
-                    const filename = `task-${id}_${timestamp}.log`;
+                    const filename = `${timestamp}.log`;
+
+                    let errorType = 'UNKNOWN';
+                    if (e instanceof CredentialExhaustedError) {
+                        errorType = 'CREDENTIAL_EXHAUSTED';
+                    } else if (e instanceof TokenRefreshFailure) {
+                        errorType = 'TOKEN_REFRESH_FAILED';
+                    } else if (e?.status >= 400 && e?.status < 500) {
+                        errorType = `4xx_${e?.status}`;
+                    } else if (e?.status >= 500) {
+                        errorType = `5xx_${e?.status}`;
+                    } else {
+                        errorType = 'APPLICATION_ERROR';
+                    }
+
                     await logCapture.saveToFile(filename, {
                         'Task ID': id,
                         'Task Name': task.name,
@@ -192,7 +191,8 @@ export class TaskRunner {
             .finally(() => {
                 // 停止捕獲並恢復原始 stdout/stderr
                 logCapture.stop();
-                console.log(tag, chalk.gray('finished, active:', this.active - 1));
+                const duration = Date.now() - startTime;
+                console.log(tag, chalk.gray(`finished in ${duration}ms`));
                 this.active--;
 
                 // 只有在未暫停時才繼續 loop

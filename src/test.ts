@@ -1,38 +1,87 @@
 import chalk from "chalk";
-import { GetToken, setToken } from "./api/auth";
-import { GetPlaylist } from "./api/endpoints";
-import { Config } from "./utils/config_loader";
-import { tryCatch } from "./utils/wrapper";
+import { GetToken } from "./api/auth.js";
+import config from './config.json' with { type: 'json' };
+import { try_catch } from "./utils/wrapper.js";
+
 
 (async () => {
-    const [token, err] = await GetToken(Config.spotify[0]!.clientID, Config.spotify[0]!.secret);
-    if (!token) return;
-    console.log('Token:', chalk.yellow(token.access_token));
-    setToken(token.access_token);
+    const track_id = "53iuhJlwXhSER5J2IYYv1W";
 
-    // const [search_res, search_err] = await tryCatch(Search('華語精選', ['playlist']));
-    // if (search_err) {
-    //     console.error('Search error:', search_err);
-    //     return;
-    // }
+    // Direct API call with #15 credential
+    const n_cred = 4 - 1;
+    const clientID = config.spotify[n_cred]!.clientID;
+    const secret = config.spotify[n_cred]!.secret;
 
-    // console.log('Search result:', search_res);
+    // Get token directly
+    const [token_res, token_err] = await GetToken(clientID, secret);
+    if (token_err) {
+        console.log('get yoken fialed');
+        return;
+    }
+    const token = token_res.access_token;
+    console.log(chalk.yellow('token'), token);
 
-    // const first_playlist = search_res.playlists!.items[0];
+    // Make API request with token
+    // const [res, err] = await tryCatch(
+    //     fetch(`https://api.spotify.com/v1/audio-features/${track_id}`, {
+    //         headers: { 'Authorization': `Bearer ${token}` }
+    //     })
+    // );
 
-    // console.log('pl:', first_playlist?.name);
-    // console.log('pl tracks:', first_playlist?.tracks.total);
-    // console.log(first_playlist);
+    const [res, err] = await try_catch(
+        fetch(`https://api.spotify.com/v1/audio-features/${track_id}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+    );
 
-    // const [page_res, page_err] = await tryCatch(defaultFetch(first_playlist!.tracks!.next!));
-    // if (page_err) {
-    //     console.error('Page fetch error:', page_err);
-    //     return;
-    // }
-    // console.log('Next page result:', page_res);
+    if (err) {
+        console.log(chalk.red('Error:'), err);
+        return;
+    }
 
-    const [res, err1] = await tryCatch(GetPlaylist('2AKSKQ0Rnd3I9zH60q70oA'))
-    console.log(res);
-})();
+    const data = await res!.json();
+    console.log(chalk.cyan('Audio Features:'), data);
 
-//https://open.spotify.com/playlist/2AKSKQ0Rnd3I9zH60q70oA
+});
+
+
+(async () => {
+    const track_id = "53iuhJlwXhSER5J2IYYv1W";
+
+    const credentials = config.spotify;
+
+    for (let index = 0; index < credentials.length; index++) {
+        const cred = credentials[index];
+        console.log(`cred #${index + 1}`);
+
+        const [token_rex, token_err] = await GetToken(cred!.clientID, cred!.secret);
+
+        if (token_err) {
+            console.log(`\tfailed to get token`);
+            return;
+        }
+
+        const token = token_rex.access_token;
+        console.log('\ttoken:', token.slice(0, 20) + '...');
+
+        const [test_res, test_err] = await try_catch(
+            fetch(`https://api.spotify.com/v1/tracks/${track_id}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+        );
+
+        if (test_err) {
+            console.log(`\tAPI request failed:`, test_err);
+            return;
+        }
+
+        if (test_res.status === 200) {
+            console.log(`\t${chalk.green('OK')}`);
+        } else if (test_res.status === 429) {
+            const retryAfter = test_res.headers.get('retry-after');
+            console.log(`\t${chalk.red('429')} - Retry after ${chalk.yellow(retryAfter) || 'unknown'}s`);
+        } else {
+            console.log(`\tStatus: ${test_res.status}`);
+        }
+    }
+})(); 

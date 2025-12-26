@@ -2,8 +2,9 @@ import chalk from "chalk";
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { db } from '../database/kysely_instance';
-import { Singleton } from "../utils/wrapper";
-import { GetToken, setToken } from "./auth";
+import { Singleton, try_catch } from "../utils/wrapper";
+import { GetToken } from "./auth";
+import { validateCredential } from "./credential_validator";
 
 export interface Cred {
     clientID: string;
@@ -26,21 +27,19 @@ interface TokenInfo {
  * Token Manager
  * - 自動輪換 credentials
  * - 定時更新 token（提前 5 分鐘更新）
- * - 記錄使用統計
  * - 追蹤每個 credential 的 ban 狀態
  */
 export class TokenManager extends Singleton<TokenManager>() {
     private credentials: Cred[] = [];
-    private credentialStatus: CredentialStatus[] = [];  // 每個 credential 的狀態
+    private credentialStatus: CredentialStatus[] = [];
     private currentIndex: number = 0;
     private tokenInfo: TokenInfo | null = null;
-    private refreshTimer: NodeJS.Timeout | null = null;
+    private mainTimer: NodeJS.Timeout | null = null;  // 統一的主定時器
+    private lastValidationTime: number = 0;  // 上次驗證時間（ms timestamp）
     private running: boolean = false;
-    private allBannedState: boolean = false;  // 追蹤全員 ban 狀態
-    private recoveryCheckTimer: NodeJS.Timeout | null = null;
+    private allBannedState: boolean = false;
     private onRecoveryCallback: (() => void) | null = null;
     private onAllBannedCallback: (() => void) | null = null;
-    private statusUpdateTimer: NodeJS.Timeout | null = null;  // 定期更新狀態檔
 
     /**
      * 初始化 Token Manager
@@ -61,15 +60,8 @@ export class TokenManager extends Singleton<TokenManager>() {
 
         console.log(chalk.blue('[TokenManager]'), `Loaded ${credentials.length} credential(s)`);
 
-        // 嘗試從 token-status.json 恢復之前的 ban 狀態
+        // 從歷史紀錄恢復 ban 狀態
         await this.loadStatusFromFile();
-
-        // 重置 allBannedState - 如果現在有任何 credential 可用，就不應該認為全員 ban 了
-        // 因為可能加入了新的未曾被 ban 過的 credentials
-        const currentlyAllBanned = this.isAllBanned();
-        if (!currentlyAllBanned) {
-            this.allBannedState = false;
-        }
 
         // 嘗試獲取 token
         let success = await this.refreshToken();
@@ -88,18 +80,9 @@ export class TokenManager extends Singleton<TokenManager>() {
             }
         }
 
-        // 啟動自動更新
-        this.startAutoRefresh();
+        // 啟動統一的監控定時器
+        this.startMainLoop();
         this.running = true;
-
-        // 啟動恢復監控
-        this.startRecoveryMonitor();
-
-        // 啟動定期狀態更新（每 30 秒）
-        this.startStatusUpdater();
-
-        // 儲存初始狀態
-        await this.saveStatusToFile();
 
         return true;
     }
@@ -165,7 +148,7 @@ export class TokenManager extends Singleton<TokenManager>() {
             };
 
             // 更新全域 token
-            setToken(tokenRes.access_token);
+            // setToken(tokenRes.access_token);
 
             const expiresInMin = Math.floor((expiresAt - Date.now()) / 60000);
             console.log(chalk.green('[TokenManager]'), `Token updated, expires in ${expiresInMin} minutes`);
@@ -186,30 +169,126 @@ export class TokenManager extends Singleton<TokenManager>() {
     }
 
     /**
-     * 啟動自動更新（定時檢查）
+     * 啟動主循環（每分鐘執行一次）
+     * 處理：token 更新、恢復檢查、狀態持久化
      */
-    private startAutoRefresh(): void {
-        if (this.refreshTimer) {
-            clearInterval(this.refreshTimer);
-        }
+    private startMainLoop(): void {
+        if (this.mainTimer) clearInterval(this.mainTimer);
 
-        // 每分鐘檢查一次是否需要更新
-        this.refreshTimer = setInterval(() => {
-            if (!this.tokenInfo) return;
+        let tickCount = 0;
+        this.mainTimer = setInterval(() => {
+            tickCount++;
+            const now = Date.now();
 
-            const timeLeft = this.tokenInfo.expiresAt - Date.now();
-            const minutesLeft = Math.floor(timeLeft / 60000);
-
-            // 剩餘時間 <= 65s，立即更新
-            if (timeLeft <= 65000) {
+            // 1. 檢查 token 是否需要更新
+            if (this.tokenInfo && this.tokenInfo.expiresAt - now <= 65000) {
                 console.log(chalk.yellow('[TokenManager]'), 'Token expired, refreshing...');
                 this.refreshToken();
             }
-            // 每 5 分鐘 log 一次狀態
-            else if (minutesLeft % 5 === 0) {
-                console.log(chalk.gray('[TokenManager]'), `Token valid for ${minutesLeft} more minutes (used ${this.tokenInfo.requestCount} times)`);
+
+            // 2. 檢查個別 credential 恢復（每 5 分鐘）
+            if (tickCount % 5 === 0) {
+                this.checkRecovery();
             }
-        }, 60_000);  // 每分鐘檢查
+
+            // 3. 持久化狀態（每 5 分鐘）
+            if (tickCount % 5 === 0) {
+                this.saveStatusToFile();
+            }
+        }, 60_000);
+    }
+
+    /**
+     * 驗證所有 credentials（已停用，保留代碼供參考）
+     * 現在完全依賴運行時的 429 響應來更新 ban 狀態
+     */
+    private async validateCredentials_DISABLED(): Promise<void> {
+        console.log(chalk.blue('[TokenManager]'), 'Starting credential validation...');
+
+        this.lastValidationTime = Date.now();
+
+        const tokens: string[] = [];
+
+        console.log(chalk.yellow('[TokenManager]'), 'Fetching tokens...');
+
+        for (const cred of this.credentials) {
+            const [token_res, token_err] = await GetToken(cred.clientID, cred.secret);
+            if (token_err) { tokens.push(''); }
+            else { tokens.push(token_res.access_token); }
+        }
+
+        console.log(chalk.yellow('[TokenManager]'), 'wait for 30 seconds before validating...');
+        await new Promise(resolve => setTimeout(resolve, 30000));
+
+        const track_id = "53iuhJlwXhSER5J2IYYv1W";
+
+        for (let i = 0; i < tokens.length; i++) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            this.credentialStatus[i]!.requestCount = 0;
+
+            if (tokens[i] === '') {
+                console.log(chalk.red(`  #${i + 1}: could not get token`));
+                this.credentialStatus[i]!.bannedUntil = Infinity;
+                continue;
+            }
+
+            const [test_res, test_err] = await try_catch(
+                fetch(`https://api.spotify.com/v1/tracks/${track_id}`, {
+                    headers: { 'Authorization': `Bearer ${tokens[i]}` }
+                })
+            );
+
+            if (test_err) {
+                console.log(chalk.red(`  #${i + 1}: validation request failed`));
+                this.credentialStatus[i]!.bannedUntil = Infinity;
+                continue;
+            }
+
+            if (test_res!.status === 200) {
+                console.log(chalk.green(`  #${i + 1}: OK`));
+                this.credentialStatus[i]!.bannedUntil = 0;
+                continue;
+            }
+
+            if (test_res!.status === 429) {
+                const retryAfter = test_res!.headers.get('retry-after');
+                const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : 3600;
+                console.log(chalk.red(`  #${i + 1}: 429 - Retry after ${retrySeconds}s`));
+                this.credentialStatus[i]!.bannedUntil = Date.now() + retrySeconds * 1000;
+                continue;
+            }
+
+            console.log(chalk.red(`  #${i + 1}: Error ${test_res!.status}`));
+            this.credentialStatus[i]!.bannedUntil = Infinity;
+        }
+
+        // for (let i = 0; i < this.credentials.length; i++) {
+        //     const cred = this.credentials[i]!;
+        //     const result = await validateCredential(cred.clientID, cred.secret);
+        //     const credDisplay = cred.clientID.substring(0, 8) + '...';
+
+        //     const status = this.credentialStatus[i];
+
+        //     if (result === true) {
+        //         console.log(chalk.green(`  #${i + 1} (${credDisplay}): OK`));
+        //         status!.bannedUntil = 0;
+        //         status!.requestCount = 0;
+        //     } else if (typeof result === 'number') {
+        //         console.log(chalk.red(`  #${i + 1} (${credDisplay}): 429 - Retry after ${result}s`));
+        //         status!.bannedUntil = Date.now() + result * 1000;
+        //         status!.requestCount = 0;
+        //     } else {
+        //         console.log(chalk.yellow(`  #${i + 1} (${credDisplay}): Error`));
+        //         status!.bannedUntil = 0;
+        //         status!.requestCount = 0;
+        //     }
+        // }
+
+        console.log(chalk.blue('[TokenManager]'), 'Credential validation completed');
+
+        // 驗證完立即寫入 token-status
+        this.saveStatusToFile();
     }
 
     /**
@@ -232,6 +311,8 @@ export class TokenManager extends Singleton<TokenManager>() {
     public recordRateLimit(retryAfterSeconds: number): void {
         const bannedUntil = Date.now() + retryAfterSeconds * 1000;
         const status = this.credentialStatus[this.currentIndex];
+        const requestCount = status ? status.requestCount : 0;
+
         if (status) {
             status.bannedUntil = bannedUntil;
         }
@@ -240,13 +321,7 @@ export class TokenManager extends Singleton<TokenManager>() {
         console.warn(chalk.red('[TokenManager]'),
             `Credential #${this.currentIndex + 1} is rate limited until ${bannedUntilTime} (${retryAfterSeconds}s)`);
 
-        // 記錄事件並更新狀態
-        this.logEventToDatabase('BANNED', `Rate limited for ${retryAfterSeconds}s`).catch(err => {
-            console.error(chalk.red('[TokenManager]'), 'Failed to log ban event:', err);
-        });
-        this.saveStatusToFile().catch(err => {
-            console.error(chalk.red('[TokenManager]'), 'Failed to save status:', err);
-        });
+        this.logEvent('BANNED', `Rate limited for ${retryAfterSeconds}s`, requestCount);
     }
 
     /**
@@ -272,6 +347,14 @@ export class TokenManager extends Singleton<TokenManager>() {
             return false;
         }
 
+        // 打印當前 credential 的累計請求數並歸零
+        const currentStatus = this.credentialStatus[this.currentIndex];
+        if (currentStatus && currentStatus.requestCount > 0) {
+            console.log(chalk.blue('[TokenManager]'),
+                `Credential #${this.currentIndex + 1} total requests: ${currentStatus.requestCount}`);
+            currentStatus.requestCount = 0;
+        }
+
         // 如果找到的就是當前的，嘗試下一個
         if (nextIndex === this.currentIndex) {
             const tempIndex = (this.currentIndex + 1) % this.credentials.length;
@@ -289,29 +372,17 @@ export class TokenManager extends Singleton<TokenManager>() {
         }
 
         console.log(chalk.cyan('[TokenManager]'), `Switching to credential #${this.currentIndex + 1}`);
-
-        // 記錄切換事件
-        await this.logEventToDatabase('SWITCHED', `Switched to credential #${this.currentIndex + 1}`);
-        await this.saveStatusToFile();
-
+        this.logEvent('SWITCHED', `Switched to credential #${this.currentIndex + 1}`);
         return await this.refreshToken();
     }
 
     /**
-     * 停止自動更新
+     * 停止 Token Manager
      */
     public stop(): void {
-        if (this.refreshTimer) {
-            clearInterval(this.refreshTimer);
-            this.refreshTimer = null;
-        }
-        if (this.recoveryCheckTimer) {
-            clearInterval(this.recoveryCheckTimer);
-            this.recoveryCheckTimer = null;
-        }
-        if (this.statusUpdateTimer) {
-            clearInterval(this.statusUpdateTimer);
-            this.statusUpdateTimer = null;
+        if (this.mainTimer) {
+            clearInterval(this.mainTimer);
+            this.mainTimer = null;
         }
         this.running = false;
         console.log(chalk.gray('[TokenManager]'), 'Stopped');
@@ -361,100 +432,95 @@ export class TokenManager extends Singleton<TokenManager>() {
     }
 
     /**
-     * 啟動恢復監控（每 5 分鐘檢查一次）
+     * 檢查恢復狀態
      */
-    private startRecoveryMonitor(): void {
-        this.recoveryCheckTimer = setInterval(() => {
-            const isAllBanned = this.isAllBanned();
+    private checkRecovery(): void {
+        const isAllBanned = this.isAllBanned();
+        const now = Date.now();
 
-            if (this.allBannedState && !isAllBanned) {
-                // 從全員 ban 恢復
-                console.log(chalk.green('[TokenManager]'), 'Recovered from all-banned state');
-                this.allBannedState = false;
+        // 檢查個別 credential 的恢復
+        for (let i = 0; i < this.credentialStatus.length; i++) {
+            const status = this.credentialStatus[i];
+            if (!status || status.bannedUntil <= 0) continue;
 
-                // 嘗試更新 token
-                this.refreshToken().catch(err => {
-                    console.error(chalk.red('[TokenManager]'), 'Failed to refresh token after recovery:', err);
-                });
-
-                this.logEventToDatabase('ALL_RECOVERED', 'At least one credential is now available').catch(err => {
-                    console.error(chalk.red('[TokenManager]'), 'Failed to log recovery event:', err);
-                });
-                this.saveStatusToFile().catch(err => {
-                    console.error(chalk.red('[TokenManager]'), 'Failed to save status:', err);
-                });
-
-                if (this.onRecoveryCallback) {
-                    this.onRecoveryCallback();
+            if (status.bannedUntil <= now) {
+                if (status.requestCount > 0) {
+                    console.log(chalk.green('[TokenManager]'),
+                        `Credential #${i + 1} recovered, resetting count`);
+                    status.requestCount = 0;
+                    if (i === this.currentIndex && this.tokenInfo) {
+                        this.tokenInfo.requestCount = 0;
+                    }
                 }
-            } else if (!this.allBannedState && isAllBanned) {
-                // 進入全員 ban 狀態
-                console.warn(chalk.red('[TokenManager]'), 'All credentials are now banned');
-                this.allBannedState = true;
-
-                this.logEventToDatabase('ALL_BANNED', 'All credentials are rate limited').catch(err => {
-                    console.error(chalk.red('[TokenManager]'), 'Failed to log all-banned event:', err);
-                });
-                this.saveStatusToFile().catch(err => {
-                    console.error(chalk.red('[TokenManager]'), 'Failed to save status:', err);
-                });
-
-                if (this.onAllBannedCallback) {
-                    this.onAllBannedCallback();
-                }
+                status.bannedUntil = 0;
             }
-            // 沒有狀態變化時不輸出任何 log
-        }, 300_000);  // 每 5 分鐘檢查
-    }
-
-    /**
-     * 啟動定期狀態更新（每 30 秒）
-     */
-    private startStatusUpdater(): void {
-        this.statusUpdateTimer = setInterval(() => {
-            this.saveStatusToFile().catch(err => {
-                console.error(chalk.red('[TokenManager]'), 'Failed to update status file:', err);
-            });
-        }, 30_000);  // 每 30 秒更新
-    }
-
-    /**
-     * 儲存當前狀態到 JSON 文件
-     */
-    private async saveStatusToFile(): Promise<void> {
-        try {
-            const logsDir = path.join(process.cwd(), 'logs');
-            await fs.mkdir(logsDir, { recursive: true });
-
-            const now = new Date();
-            const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-
-            const status = {
-                lastUpdate: taipeiTime.toISOString().replace('Z', '+08:00'),
-                allBanned: this.allBannedState,
-                currentCredential: this.currentIndex,
-                credentials: this.credentials.map((cred, index) => {
-                    const credStatus = this.credentialStatus[index];
-                    const isBanned = credStatus ? credStatus.bannedUntil > Date.now() : false;
-                    const bannedUntil = credStatus && isBanned
-                        ? new Date(credStatus.bannedUntil + 8 * 60 * 60 * 1000).toISOString().replace('Z', '+08:00')
-                        : null;
-
-                    return {
-                        index,
-                        clientId: cred.clientID,  // 儲存完整 clientID
-                        isBanned,
-                        bannedUntil,
-                        requestCount: credStatus?.requestCount || 0
-                    };
-                })
-            };
-
-            const filepath = path.join(logsDir, 'token-status.json');
-            await fs.writeFile(filepath, JSON.stringify(status, null, 2), 'utf-8');
-        } catch (error) {
-            console.error(chalk.red('[TokenManager]'), 'Failed to save status to file:', error);
         }
+
+        // 全員 ban 狀態變化
+        if (this.allBannedState && !isAllBanned) {
+            console.log(chalk.green('[TokenManager]'), 'Recovered from all-banned state');
+            this.allBannedState = false;
+            this.refreshToken();
+            if (this.onRecoveryCallback) this.onRecoveryCallback();
+        } else if (!this.allBannedState && isAllBanned) {
+            console.warn(chalk.red('[TokenManager]'), 'All credentials are now banned');
+            this.allBannedState = true;
+            if (this.onAllBannedCallback) this.onAllBannedCallback();
+        }
+    }
+
+    /**
+     * 持久化當前狀態
+     */
+    private saveStatusToFile(): void {
+        const logsDir = path.join(process.cwd(), 'logs');
+        const now = new Date();
+        const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+
+        const status = {
+            lastUpdate: taipeiTime.toISOString().replace('Z', '+08:00'),
+            allBanned: this.allBannedState,
+            currentCredential: this.currentIndex,
+            credentials: this.credentials.map((cred, index) => {
+                const credStatus = this.credentialStatus[index];
+                const isBanned = credStatus ? credStatus.bannedUntil > Date.now() : false;
+                const bannedUntil = credStatus && isBanned
+                    ? (credStatus.bannedUntil === Infinity
+                        ? 'Infinity'
+                        : new Date(credStatus.bannedUntil + 8 * 60 * 60 * 1000).toISOString().replace('Z', '+08:00'))
+                    : null;
+
+                return {
+                    index,
+                    clientId: cred.clientID,
+                    isBanned,
+                    bannedUntil,
+                    requestCount: credStatus?.requestCount || 0
+                };
+            })
+        }; const filepath = path.join(logsDir, 'token-status.json');
+        fs.mkdir(logsDir, { recursive: true })
+            .then(() => fs.writeFile(filepath, JSON.stringify(status, null, 2), 'utf-8'))
+            .catch(() => { });
+    }
+
+    /**
+     * 記錄事件到 database
+     */
+    private logEvent(eventType: 'BANNED' | 'SWITCHED', details?: string, used?: number): void {
+        const cred = this.credentials[this.currentIndex];
+        if (!cred) return;
+
+        db.insertInto('token_events')
+            .values({
+                timestamp: new Date(),
+                event_type: eventType,
+                client_id: cred.clientID,
+                details: details || null,
+                used: used ?? null
+            })
+            .execute()
+            .catch(() => { });
     }
 
     /**
@@ -484,14 +550,26 @@ export class TokenManager extends Singleton<TokenManager>() {
                     if (!credStatus) continue;
 
                     if (savedCred.isBanned && savedCred.bannedUntil) {
-                        // 將時間字符串轉換回 timestamp
-                        const bannedUntilTime = new Date(savedCred.bannedUntil).getTime();
-                        credStatus.bannedUntil = bannedUntilTime;
-
-                        const remainingSeconds = Math.ceil((bannedUntilTime - Date.now()) / 1000);
-                        if (remainingSeconds > 0) {
+                        // 處理特殊值 'Infinity'
+                        if (savedCred.bannedUntil === 'Infinity') {
+                            credStatus.bannedUntil = Infinity;
                             console.log(chalk.yellow('[TokenManager]'),
-                                `Restored credential #${currentIndex + 1} ban status: ${remainingSeconds}s remaining`);
+                                `Restored credential #${currentIndex + 1} ban status: permanently banned`);
+                        } else {
+                            // 將時間字符串轉換回 timestamp
+                            const bannedUntilTime = new Date(savedCred.bannedUntil).getTime();
+                            const now = Date.now();
+
+                            // 只有在 ban 時限未過時才恢復 ban 狀態
+                            if (bannedUntilTime > now) {
+                                credStatus.bannedUntil = bannedUntilTime;
+                                const remainingSeconds = Math.ceil((bannedUntilTime - now) / 1000);
+                                console.log(chalk.yellow('[TokenManager]'),
+                                    `Restored credential #${currentIndex + 1} ban status: ${remainingSeconds}s remaining`);
+                            } else {
+                                // ban 已過期，重置 requestCount
+                                credStatus.requestCount = 0;
+                            }
                         }
                     }
                     // 恢復使用次數統計
@@ -527,25 +605,5 @@ export class TokenManager extends Singleton<TokenManager>() {
         }
     }
 
-    /**
-     * 記錄事件到 database
-     */
-    private async logEventToDatabase(eventType: string, details?: string): Promise<void> {
-        try {
-            const cred = this.credentials[this.currentIndex];
-            if (!cred) return;
 
-            await db
-                .insertInto('token_events')
-                .values({
-                    timestamp: new Date(),
-                    event_type: eventType,
-                    client_id: cred.clientID,
-                    details: details || null
-                })
-                .execute();
-        } catch (error) {
-            console.error(chalk.red('[TokenManager]'), 'Failed to log event to database:', error);
-        }
-    }
 }
